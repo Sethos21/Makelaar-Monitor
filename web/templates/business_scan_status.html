@@ -22,13 +22,41 @@
     </div>
     {% if scan.status == "running" %}
     <p class="notice">
-        Controleer het Chrome-venster. Als Funda een menscontrole toont, los deze handmatig op en druk daarna
-        indien gevraagd ENTER in de console waarin <code>py app.py</code> draait.
+        Controleer het Chrome-venster. Als Funda een menscontrole toont: <strong>wacht op handmatige Funda-verificatie</strong> -
+        los dit rechtstreeks op in dat zichtbare Chrome-venster. De scan gaat automatisch verder zodra Funda weer
+        normale resultaten toont; er is geen ENTER in de console meer nodig.
     </p>
     {% else %}
     <p class="notice">De scanner is klaar; de gevonden objecten worden nu automatisch in de Business-historie geïmporteerd.</p>
     {% endif %}
     <p class="melding">Deze pagina ververst zelf elke 5 seconden.</p>
+
+    {% if scan.stop_aangevraagd %}
+    <p class="melding melding-fout">Stop wordt uitgevoerd...</p>
+    {% elif scan.status == "running" %}
+    <form method="post" action="{{ url_for('business_scan_stop') }}" class="inline-form">
+        <button type="submit" class="secondary-button">Scan afbreken</button>
+    </form>
+    {% endif %}
+</div>
+
+{% elif scan.status == "gestopt" %}
+<h1>Scan afgebroken</h1>
+<div class="card">
+    <div class="analyse-context">
+        <span><strong>Regio's:</strong> {{ scan.plaatsen | join(", ") if scan.plaatsen else "-" }}</span>
+        <span><strong>Categorieën:</strong> {{ scan.categorieen | join(", ") if scan.categorieen else "-" }}</span>
+        <span><strong>Gestart om:</strong> {{ scan.gestart_om_weergave if scan.gestart_om_weergave else "-" }}</span>
+        <span><strong>Afgebroken om:</strong> {{ scan.eind_om_weergave if scan.eind_om_weergave else "-" }}</span>
+    </div>
+    <p class="melding">
+        De scan is op verzoek gestopt. Er is GEEN historie-import uitgevoerd - de Business-database bevat nog
+        uitsluitend de laatst succesvol voltooide scan.
+    </p>
+    <div class="analyse-knoppen">
+        <a class="secondary-button" href="{{ url_for('index', tab='bedrijfsmatig') }}">Nieuwe scan starten</a>
+        <a class="secondary-button" href="{{ url_for('index', tab='bedrijfsmatig') }}">Terug naar Bedrijfsmatig</a>
+    </div>
 </div>
 
 {% elif scan.status == "success" %}

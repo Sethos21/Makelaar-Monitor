@@ -35,7 +35,7 @@ import time
 import unicodedata
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -44,6 +44,35 @@ OBJECTTYPE_SLUGS = {
     "Kantoor": "kantoor",
     "Bedrijfsruimte": "bedrijfshal",
 }
+
+# Bestandsnaam van het coöperatieve stopvlag-bestand, gezocht in --output-map.
+# app.py (of een gebruiker vanaf de commandolijn) maakt dit bestand aan om een
+# lopende scan netjes te laten afbreken; de scanner controleert het op
+# meerdere veilige punten (voor elke navigatie, in de paginalus, tijdens een
+# menscontrole-wachtperiode) en ruimt zelf Playwright/Chrome op vóór het stopt.
+STOP_FLAG_NAAM = "_business_scan_stop.flag"
+
+# Afsluitcode bij een bewust (coöperatief of Ctrl+C) afgebroken scan - apart
+# van 0 (succes) en de standaard-1-bij-onverwachte-fout, zodat app.py een
+# gebruikersstop betrouwbaar kan onderscheiden van een echte crash.
+STOP_EXITCODE = 3
+
+# Maximale wachttijd op een menscontrole/captcha voordat de scan alsnog wordt
+# afgebroken (begrensde timeout, geen oneindig wachten - zie pause()).
+MENSCONTROLE_MAX_WACHT_S = 1800
+
+
+class ScanGestopt(BaseException):
+    """Intern signaal dat de gebruiker een stop heeft aangevraagd (via het
+    stopvlag-bestand). Erft bewust van BaseException (net als
+    KeyboardInterrupt/SystemExit) zodat generieke 'except Exception'-blokken
+    dit nooit per ongeluk opvangen en als een gewone navigatiefout
+    behandelen."""
+
+
+def controleer_stop(stop_flag_pad: Path) -> None:
+    if stop_flag_pad.exists():
+        raise ScanGestopt()
 
 FIELDS = [
     "Peildatum", "Plaats", "Gezocht_categorie", "Objecttype", "Status",
@@ -132,35 +161,51 @@ def needs_human(page):
     ])
 
 
-def pause(url, reason):
+def pause(page, reason, stop_flag_pad):
+    """Wacht op menscontrole/captcha ZONDER blokkerende input()/ENTER: dit
+    peilt elke 2s of (a) een stop is aangevraagd of (b) de controle in het
+    zichtbare Chrome-venster al is opgelost (needs_human() weer False),
+    en gaat dan vanzelf verder - 'Wacht op handmatige Funda-verificatie',
+    geen actie nodig behalve het oplossen in Chrome zelf. Begrensd door
+    MENSCONTROLE_MAX_WACHT_S; blijft daarnaast op elk moment onderbreekbaar
+    via het stopvlag-bestand (ook tijdens deze wachtperiode)."""
     say("\n" + "=" * 72)
     say("FUNDA IN BUSINESS HEEFT AANDACHT NODIG")
     say(reason)
-    say(f"Pagina: {url}")
-    try:
-        input("Controleer Chrome, los zo nodig de controle op en druk ENTER... ")
-    except EOFError:
-        raise SystemExit(
-            "Geen interactieve console beschikbaar om ENTER te bevestigen "
-            "(stdin gesloten). De scan is gestopt bij een menscontrole die "
-            "handmatige actie vereist - start de scanner opnieuw vanuit een "
-            "console waarin je zelf kunt reageren."
-        )
+    say(f"Pagina: {page.url}")
+    say("Wacht op handmatige Funda-verificatie. Los dit op in het zichtbare "
+        "Chrome-venster - de scan gaat automatisch verder zodra Funda weer "
+        "normale resultaten toont. Geen ENTER nodig.")
 
-
-def safe_goto(page, url, wait_ms=1800):
+    gewacht_s = 0.0
     while True:
+        controleer_stop(stop_flag_pad)
+        time.sleep(2)
+        gewacht_s += 2
+        if not needs_human(page):
+            say("Verificatie lijkt opgelost - scan gaat automatisch verder.")
+            return
+        if gewacht_s >= MENSCONTROLE_MAX_WACHT_S:
+            raise SystemExit(
+                f"Menscontrole niet binnen {int(MENSCONTROLE_MAX_WACHT_S)}s opgelost - "
+                "scan afgebroken. Start opnieuw en los de controle sneller op."
+            )
+
+
+def safe_goto(page, url, stop_flag_pad, wait_ms=1800):
+    while True:
+        controleer_stop(stop_flag_pad)
         try:
             page.goto(url, wait_until="commit", timeout=30000)
             page.wait_for_timeout(wait_ms)
             if needs_human(page):
-                pause(url, "Robot-/menscontrole zichtbaar.")
+                pause(page, "Robot-/menscontrole zichtbaar.", stop_flag_pad)
                 continue
             return
         except KeyboardInterrupt:
             raise
         except Exception as exc:
-            pause(url, f"Navigatieprobleem: {exc}")
+            pause(page, f"Navigatieprobleem: {exc}", stop_flag_pad)
 
 
 def accept_cookies(page):
@@ -173,23 +218,24 @@ def accept_cookies(page):
         pass
 
 
-def resultaten_gereed(page, timeout_ms=15000):
+def resultaten_gereed(page, stop_flag_pad, timeout_ms=15000):
     """Conservatieve, automatische gereedheidscheck (zie ook de aanpassing in
     de woningenscanner). Bij een timeout wordt eerst gecontroleerd of dit een
     menscontrole is (dan pauzeren) voordat dit als "geen resultaten" wordt
     behandeld - anders verdwijnt een botwal onterecht stilletjes."""
+    controleer_stop(stop_flag_pad)
     try:
         page.locator("[data-search-result-listing]").first.wait_for(
             state="attached", timeout=timeout_ms
         )
     except PlaywrightTimeoutError:
         if needs_human(page):
-            pause(page.url, "Mens-/captchacontrole gedetecteerd (timeout bij wachten op resultaten).")
-            return resultaten_gereed(page, timeout_ms)
+            pause(page, "Mens-/captchacontrole gedetecteerd (timeout bij wachten op resultaten).", stop_flag_pad)
+            return resultaten_gereed(page, stop_flag_pad, timeout_ms)
         return False
 
     if needs_human(page):
-        pause(page.url, "Mens-/captchacontrole gedetecteerd vóór het uitlezen.")
+        pause(page, "Mens-/captchacontrole gedetecteerd vóór het uitlezen.", stop_flag_pad)
 
     return True
 
@@ -199,6 +245,29 @@ def categorie_url(objecttype_slug, plaats_slug, pagina):
     if pagina > 1:
         return f"{basis}p{pagina}/"
     return basis
+
+
+def vind_volgende_pagina_url(page):
+    """Zoekt de ECHTE 'volgende pagina'-link in de DOM (rel="next"), i.p.v.
+    zelf een pagina-URL te raden. Retourneert de absolute URL, of None als er
+    geen volgende pagina meer is.
+
+    Dit is het betrouwbare stopsignaal, bevestigd via live DOM-onderzoek: op
+    de laatste echte pagina ontbreekt a[rel="next"] volledig. Een geraden
+    pagina-URL vóórbij het einde (het oude gedrag) geeft bij Funda soms een
+    stille herhaling van pagina 1 terug en soms een trage 'geen
+    resultaten'-timeout - beide zorgden voor een onnodig, verwarrend traag
+    extra paginabezoek dat aanvoelde als vastlopen."""
+    try:
+        link = page.locator("a[rel='next']").first
+        if link.count() == 0:
+            return None
+        href = link.get_attribute("href", timeout=2000)
+        if not href:
+            return None
+        return urljoin(page.url, href)
+    except Exception:
+        return None
 
 
 def haal_kaarten(page):
@@ -483,6 +552,7 @@ def main():
 
     outdir = Path(opt.output_map)
     outdir.mkdir(parents=True, exist_ok=True)
+    stop_flag_pad = outdir / STOP_FLAG_NAAM
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     label = safe_output_name(places)
@@ -500,6 +570,7 @@ def main():
 
     combined_by_id = {}
     samenvatting = []
+    gestopt = False
 
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
@@ -512,69 +583,106 @@ def main():
         )
         page = context.pages[0] if context.pages else context.new_page()
 
-        for plaats in places:
-            plaats_slug = funda_area_slug(plaats)
+        try:
+            for plaats in places:
+                plaats_slug = funda_area_slug(plaats)
 
-            for categorie in opt.objecttypes:
-                slug = OBJECTTYPE_SLUGS[categorie]
-                say(f"\n--- {plaats} / {categorie} ({slug}) ---")
+                for categorie in opt.objecttypes:
+                    controleer_stop(stop_flag_pad)
+                    slug = OBJECTTYPE_SLUGS[categorie]
+                    say(f"\n--- {plaats} / {categorie} ({slug}) ---")
 
-                gevonden_hier = {}
-                vorige_ids = None
+                    gevonden_hier = {}
+                    bezochte_urls = set()
+                    volgende_url = categorie_url(slug, plaats_slug, 1)
+                    nr = 0
 
-                for nr in range(1, opt.max_pages + 1):
-                    url = categorie_url(slug, plaats_slug, nr)
-                    safe_goto(page, url, 1800)
-                    if nr == 1:
-                        accept_cookies(page)
-                        page.wait_for_timeout(1000)
+                    while volgende_url and nr < opt.max_pages:
+                        controleer_stop(stop_flag_pad)
+                        nr += 1
 
-                    if not resultaten_gereed(page):
-                        say(f"Pagina {nr}: geen resultaten gevonden binnen de tijd -> einde {categorie} in {plaats}.")
-                        break
+                        if volgende_url in bezochte_urls:
+                            say(f"Pagina {nr}: URL al eerder bezocht ({volgende_url}) -> einde {categorie} in {plaats}.")
+                            break
+                        bezochte_urls.add(volgende_url)
 
-                    kaarten = haal_kaarten(page)
-                    aantal_op_pagina = kaarten.count()
+                        huidige_url = volgende_url
+                        safe_goto(page, huidige_url, stop_flag_pad, 1800)
+                        if nr == 1:
+                            accept_cookies(page)
+                            page.wait_for_timeout(1000)
 
-                    if not aantal_op_pagina:
-                        say(f"Pagina {nr}: geen objecten -> einde {categorie} in {plaats}.")
-                        break
+                        if not resultaten_gereed(page, stop_flag_pad):
+                            say(f"Pagina {nr}: geen resultaten gevonden binnen de tijd -> einde {categorie} in {plaats}.")
+                            break
 
-                    huidige_ids = set()
-                    nieuw_op_pagina = 0
-                    for idx in range(aantal_op_pagina):
-                        oid, href, adres_tekst, objecttype_tekst, row_txt = lees_kaart(kaarten.nth(idx))
-                        if not oid:
-                            continue
-                        huidige_ids.add(oid)
-                        if oid in gevonden_hier:
-                            continue
-                        rij = parse_rij(oid, href, adres_tekst, objecttype_tekst, row_txt, plaats, categorie)
-                        gevonden_hier[oid] = rij
-                        nieuw_op_pagina += 1
+                        kaarten = haal_kaarten(page)
+                        aantal_op_pagina = kaarten.count()
 
-                    if vorige_ids is not None and huidige_ids == vorige_ids:
-                        say(f"Pagina {nr}: zelfde objecten als vorige pagina -> einde {categorie} in {plaats}.")
-                        break
+                        if not aantal_op_pagina:
+                            say(f"Pagina {nr}: geen objecten -> einde {categorie} in {plaats}.")
+                            break
 
-                    say(f"Pagina {nr}: {len(huidige_ids)} objecten op pagina | {nieuw_op_pagina} nieuw | totaal {categorie}: {len(gevonden_hier)}")
+                        huidige_ids = set()
+                        nieuw_op_pagina = 0
+                        for idx in range(aantal_op_pagina):
+                            oid, href, adres_tekst, objecttype_tekst, row_txt = lees_kaart(kaarten.nth(idx))
+                            if not oid:
+                                continue
+                            huidige_ids.add(oid)
+                            if oid in gevonden_hier:
+                                continue
+                            rij = parse_rij(oid, href, adres_tekst, objecttype_tekst, row_txt, plaats, categorie)
+                            gevonden_hier[oid] = rij
+                            nieuw_op_pagina += 1
 
-                    write_csv(checkpoint, list(combined_by_id.values()) + list(gevonden_hier.values()))
+                        duplicaten_op_pagina = len(huidige_ids) - nieuw_op_pagina
+                        say(
+                            f"Pagina {nr}: {aantal_op_pagina} kaarten | {len(huidige_ids)} unieke ID's | "
+                            f"{nieuw_op_pagina} nieuw | {duplicaten_op_pagina} duplicaat(en) | "
+                            f"totaal {categorie}: {len(gevonden_hier)}"
+                        )
 
-                    vorige_ids = huidige_ids
-                    if opt.delay:
-                        time.sleep(opt.delay)
+                        write_csv(checkpoint, list(combined_by_id.values()) + list(gevonden_hier.values()))
 
-                for oid, rij in gevonden_hier.items():
-                    if oid in combined_by_id:
-                        combined_by_id[oid] = merge_duplicate(combined_by_id[oid], rij)
-                    else:
-                        combined_by_id[oid] = rij
+                        if nieuw_op_pagina == 0:
+                            # Robuuster dan de oude "zelfde als vórige pagina"-check: dit
+                            # vangt óók een pagina die (bv. bij een geraden/ongeldige
+                            # pagina-URL) toevallig een EERDERE pagina herhaalt in plaats
+                            # van alleen de allerlaatste - voorkomt een extra onnodig
+                            # paginabezoek voordat wordt gestopt.
+                            say(f"Pagina {nr}: geen nieuwe objecten t.o.v. eerder gezien -> einde {categorie} in {plaats}.")
+                            break
 
-                samenvatting.append((plaats, categorie, len(gevonden_hier)))
-                write_csv(checkpoint, list(combined_by_id.values()))
+                        if opt.delay:
+                            time.sleep(opt.delay)
 
-        context.close()
+                        controleer_stop(stop_flag_pad)
+                        volgende_url = vind_volgende_pagina_url(page)
+                        if not volgende_url:
+                            say(f"Pagina {nr}: geen 'volgende pagina'-link meer gevonden -> einde {categorie} in {plaats}.")
+
+                    for oid, rij in gevonden_hier.items():
+                        if oid in combined_by_id:
+                            combined_by_id[oid] = merge_duplicate(combined_by_id[oid], rij)
+                        else:
+                            combined_by_id[oid] = rij
+
+                    samenvatting.append((plaats, categorie, len(gevonden_hier)))
+                    write_csv(checkpoint, list(combined_by_id.values()))
+        except ScanGestopt:
+            gestopt = True
+            say("\nStop aangevraagd door gebruiker - scan wordt netjes afgebroken.")
+        finally:
+            # Playwright/Chrome ALTIJD netjes sluiten, ook bij een stop of een
+            # onverwachte fout - voorkomt een wees-Chrome-proces.
+            context.close()
+
+    if gestopt:
+        say("Scan afgebroken. Het checkpoint-bestand blijft staan (voor debugging), "
+            "maar er wordt bewust GEEN *_alles.csv geschreven en dus ook geen "
+            "historie-import uitgevoerd voor deze onvolledige scan.")
+        raise SystemExit(STOP_EXITCODE)
 
     combined_rows = list(combined_by_id.values())
     combined_rows.sort(key=lambda r: (normalized_place(r.get("Plaats", "")), clean(r.get("Adres", "")).casefold()))
@@ -605,4 +713,5 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        say("\nScan afgebroken. Laatste checkpoint blijft behouden.")
+        say("\nScan afgebroken (Ctrl+C). Laatste checkpoint blijft behouden.")
+        raise SystemExit(STOP_EXITCODE)

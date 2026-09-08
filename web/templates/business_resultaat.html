@@ -80,9 +80,9 @@
         <span class="kpi-value">{{ ("€ " ~ "{:,.0f}".format(huur_kpis.mediaan_m2_jaar).replace(",", ".")) if huur_kpis.mediaan_m2_jaar is not none else "-" }}</span>
     </div>
     <div class="kpi-card berekend kerncijfer">
-        <span class="kpi-label">Bekende berekende jaarhuur</span>
+        <span class="kpi-label">Berekende jaarhuur</span>
         <span class="kpi-value groot">{{ ("€ " ~ "{:,.0f}".format(huur_kpis.berekende_jaarhuur_totaal).replace(",", ".")) if huur_kpis.berekende_jaarhuur_totaal is not none else "-" }}</span>
-        <span class="kpi-sublabel">gebaseerd op {{ huur_kpis.berekende_jaarhuur_aantal }} object(en) · ⚠ huurprijs × oppervlakte, alleen waar voldoende brondata bekend is - niet de totale huurwaarde van het volledige actieve aanbod</span>
+        <span class="kpi-sublabel">Gebaseerd op {{ huur_kpis.berekende_jaarhuur_aantal }} van {{ kpis.huuraanbod }} huurobjecten · huurprijs × oppervlakte, alleen waar €/m²/jaar + oppervlakte bekend zijn - niet de totale huurwaarde van het volledige actieve aanbod</span>
     </div>
 </div>
 
@@ -180,7 +180,7 @@
                 <th class="num">Huur</th>
                 <th class="num">Koop</th>
                 <th class="num">Koopwaarde</th>
-                <th class="num">Bekende jaarhuur</th>
+                <th class="num">Berekende jaarhuur</th>
             </tr>
         </thead>
         <tbody>

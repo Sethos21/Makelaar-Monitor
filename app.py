@@ -40,6 +40,13 @@ BUSINESS_HISTORIE_PAD = BASE_DIR / "historie" / "funda_business_historie_v1.py"
 BUSINESS_OUTPUT_DIR = BASE_DIR / "output" / "bedrijfsmatig"
 BUSINESS_HISTORIE_OUTPUT_DIR = BUSINESS_OUTPUT_DIR / "historie"
 
+# Coöperatief stopvlag-bestand voor een lopende Business-scan. Bestandsnaam
+# moet EXACT overeenkomen met STOP_FLAG_NAAM in
+# scanner/funda_business_scanner_v1.py - de scanner zelf controleert dit pad
+# (afgeleid van --output-map) en sluit Playwright/Chrome netjes af zodra het
+# verschijnt.
+BUSINESS_SCAN_STOP_FLAG = BUSINESS_OUTPUT_DIR / "_business_scan_stop.flag"
+
 app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
 
 # Eenvoudige, in-memory scanstatus. SCAN_RUNNING_LOCK bewaakt dat er maximaal
@@ -60,6 +67,12 @@ SCAN_STATE: dict = {"status": "idle"}
 # van woningen gescheiden statusobject.
 BUSINESS_STATE_LOCK = threading.Lock()
 BUSINESS_SCAN_STATE: dict = {"status": "idle"}
+
+# Veilige referentie naar het ACTIEVE Business-scanner-subprocess (of None),
+# beschermd door BUSINESS_STATE_LOCK. Nodig om een lopende scan betrouwbaar
+# te kunnen afbreken - een losse boolean zou het externe subprocess niet
+# stoppen.
+BUSINESS_ACTIEVE_PROCES: subprocess.Popen | None = None
 
 REGIOS_STANDAARD = [
     "Uden",
@@ -818,7 +831,7 @@ def bouw_business_makelaarstabel(rijen: list[dict]) -> list[dict]:
     """Aandeel = unieke actieve objecten van de makelaar / totaal unieke actieve
     objecten binnen de HUIDIGE selectie (rijen is al gefilterd op status/
     transactietype vóórdat deze functie wordt aangeroepen). Koopwaarde en
-    Bekende jaarhuur zijn sommen van uitsluitend betrouwbare brongegevens
+    Berekende jaarhuur zijn sommen van uitsluitend betrouwbare brongegevens
     (geldige numerieke Koopprijs resp. bestaande Berekende_huur_per_jaar) -
     er wordt nooit een bedrag verzonnen voor n.o.t.k./op aanvraag/ontbrekende
     data."""
@@ -1354,17 +1367,90 @@ def _importeer_in_business_historie(csv_pad: Path, plaatsen: list[str], categori
     return True, "Business-historie succesvol bijgewerkt.", samenvatting
 
 
+def _verwijder_business_stop_flag() -> None:
+    try:
+        BUSINESS_SCAN_STOP_FLAG.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _forceer_procesboom_stop(pid: int) -> None:
+    """Laatste redmiddel bij het afbreken van een Business-scan: Windows-
+    veilige, geforceerde beëindiging van uitsluitend DIT ene PID + zijn
+    kindprocessen (o.a. het Chrome-proces dat Playwright apart start en dat
+    bij het enkel doden van de Python-ouder anders wees zou blijven
+    draaien). Gebruikt bewust `taskkill /PID <pid> /T /F` - scoped tot deze
+    ene procesboom, NOOIT een generieke 'kill alle Chrome.exe'-aanpak die
+    andere Chrome-sessies van de gebruiker zou kunnen raken."""
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True, timeout=15,
+        )
+    except Exception:
+        pass
+
+
+def _wacht_op_business_proces(proces: subprocess.Popen) -> int:
+    """Wacht op het scanner-subprocess, maar blijft ondertussen elke seconde
+    controleren of de gebruiker intussen een stop heeft aangevraagd (via
+    /business/scan/stop). Voorkeursvolgorde bij een stopverzoek, conform de
+    opdracht: (1) coöperatief - de scanner zelf ziet het stopvlag-bestand en
+    sluit Playwright/Chrome netjes af; (2) een nette terminate(); (3) pas als
+    laatste redmiddel een geforceerde procesboom-kill van dit ene PID."""
+    COOPERATIEVE_WACHTTIJD_S = 15
+    TERMINATE_WACHTTIJD_S = 5
+
+    while True:
+        try:
+            return proces.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+        with BUSINESS_STATE_LOCK:
+            stop_gevraagd = BUSINESS_SCAN_STATE.get("stop_aangevraagd", False)
+        if not stop_gevraagd:
+            continue
+
+        try:
+            return proces.wait(timeout=COOPERATIEVE_WACHTTIJD_S)
+        except subprocess.TimeoutExpired:
+            pass
+
+        try:
+            proces.terminate()
+        except Exception:
+            pass
+        try:
+            return proces.wait(timeout=TERMINATE_WACHTTIJD_S)
+        except subprocess.TimeoutExpired:
+            pass
+
+        _forceer_procesboom_stop(proces.pid)
+        try:
+            return proces.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            resultaat = proces.poll()
+            return resultaat if resultaat is not None else -1
+
+
 def _voer_business_scan_uit(
     plaatsen: list[str], categorieen: list[str], statussen: list[str],
     transactietype: str, gestart_om: datetime,
 ) -> None:
     """Draait in een achtergrondthread: start de bestaande Business-scanner,
-    wacht op het resultaat en importeert dit daarna via de bestaande
+    wacht op het resultaat (onderbreekbaar via BUSINESS_SCAN_STATE
+    ["stop_aangevraagd"]) en importeert dit daarna via de bestaande
     Business-historie-tool. Analoog aan _voer_scan_uit() voor woningen, maar
     volledig gescheiden state/output/database - alleen SCAN_RUNNING_LOCK
     (hierboven) is gedeeld met woningen."""
+    global BUSINESS_ACTIEVE_PROCES
     try:
         BUSINESS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        # Voorkomt dat een stopvlag van een eerdere, al afgehandelde scan
+        # deze NIEUWE scan per ongeluk direct zou laten stoppen.
+        _verwijder_business_stop_flag()
+
         cmd = [
             sys.executable, str(BUSINESS_SCANNER_PAD),
             "--plaatsen", *plaatsen,
@@ -1373,9 +1459,9 @@ def _voer_business_scan_uit(
         ]
 
         # Zelfde reden als bij de woningenscanner: geen stdin/stdout/stderr-
-        # omleiding, zodat de zichtbare Chrome + interactieve ENTER-/
-        # menscontrole-flow in hetzelfde consolevenster als "py app.py"
-        # blijft werken. Geen shell=True, geen headless-conversie.
+        # omleiding, zodat de zichtbare Chrome + interactieve menscontrole-
+        # flow in hetzelfde consolevenster als "py app.py" blijft werken.
+        # Geen shell=True, geen headless-conversie.
         try:
             proces = subprocess.Popen(cmd, cwd=str(BASE_DIR))
         except OSError as exc:
@@ -1388,8 +1474,27 @@ def _voer_business_scan_uit(
 
         with BUSINESS_STATE_LOCK:
             BUSINESS_SCAN_STATE["proces_id"] = proces.pid
+            BUSINESS_ACTIEVE_PROCES = proces
 
-        returncode = proces.wait()
+        returncode = _wacht_op_business_proces(proces)
+
+        with BUSINESS_STATE_LOCK:
+            BUSINESS_ACTIEVE_PROCES = None
+            gestopt_door_gebruiker = BUSINESS_SCAN_STATE.get("stop_aangevraagd", False)
+
+        _verwijder_business_stop_flag()
+
+        if gestopt_door_gebruiker:
+            # Harde eis: bij een door de gebruiker afgebroken scan NOOIT de
+            # CSV opzoeken of historie-import starten, ongeacht de
+            # afsluitcode van het (mogelijk geforceerd beëindigde) proces.
+            with BUSINESS_STATE_LOCK:
+                BUSINESS_SCAN_STATE.update(
+                    status="gestopt",
+                    foutmelding=None,
+                    eind_om_weergave=datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+                )
+            return
 
         if returncode != 0:
             with BUSINESS_STATE_LOCK:
@@ -1441,6 +1546,7 @@ def _voer_business_scan_uit(
             )
     except Exception:
         with BUSINESS_STATE_LOCK:
+            BUSINESS_ACTIEVE_PROCES = None
             BUSINESS_SCAN_STATE.update(
                 status="error",
                 foutmelding=(
@@ -1648,6 +1754,32 @@ def business_scan_start():
         daemon=True,
     )
     thread.start()
+
+    return redirect(url_for("business_scan_status_pagina"))
+
+
+@app.route("/business/scan/stop", methods=["POST"])
+def business_scan_stop():
+    """Vraagt een lopende Business-scan aan om af te breken. Idempotent
+    (zoals gevraagd): een tweede/derde klik terwijl de stop al onderweg is
+    zet niets opnieuw in werking en veroorzaakt geen dubbele terminate,
+    KeyError of traceback - `stop_aangevraagd` wordt maar één keer op True
+    gezet. De daadwerkelijke afhandeling (coöperatief -> terminate ->
+    geforceerd, cleanup, lock vrijgeven, geen historie-import) gebeurt in
+    _wacht_op_business_proces()/_voer_business_scan_uit() in de
+    achtergrondthread - deze route registreert alleen het verzoek."""
+    with BUSINESS_STATE_LOCK:
+        actief = BUSINESS_SCAN_STATE.get("status") in ("running", "importing")
+        al_aangevraagd = BUSINESS_SCAN_STATE.get("stop_aangevraagd", False)
+        if actief and not al_aangevraagd:
+            BUSINESS_SCAN_STATE["stop_aangevraagd"] = True
+
+    if actief and not al_aangevraagd:
+        try:
+            BUSINESS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            BUSINESS_SCAN_STOP_FLAG.touch()
+        except OSError:
+            pass
 
     return redirect(url_for("business_scan_status_pagina"))
 
