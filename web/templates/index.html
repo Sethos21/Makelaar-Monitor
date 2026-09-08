@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block title %}Makelaar Monitor{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <h1>Makelaar Monitor</h1>
+    <p class="subtitle">Woningaanbod en marktposities van makelaars per regio, in één overzicht.</p>
+</section>
+
+<form class="analyse-form" action="{{ url_for('analyse') }}" method="get">
+    <input type="hidden" name="type" id="type-input" value="{{ actieve_tab }}">
+
+    <div class="tabbar" role="tablist">
+        <button type="button" class="tab {% if actieve_tab == 'woningen' %}active{% endif %}" data-type="woningen">Woningen</button>
+        <button type="button" class="tab {% if actieve_tab == 'bedrijfsmatig' %}active{% endif %}" data-type="bedrijfsmatig">Bedrijfsmatig vastgoed</button>
+    </div>
+
+    <div id="panel-woningen" class="panel {% if actieve_tab != 'woningen' %}hidden{% endif %}">
+        <section class="card">
+            <h2>Regio</h2>
+            <div class="checkbox-toolbar">
+                <button type="button" class="link-button" data-select-all="#regio-grid">Alles selecteren</button>
+                <button type="button" class="link-button" data-select-none="#regio-grid">Alles wissen</button>
+            </div>
+            <div class="checkbox-grid" id="regio-grid">
+                {% for regio in regios %}
+                <label class="checkbox">
+                    <input type="checkbox" name="plaats" value="{{ regio }}" {% if regio in regio_standaard %}checked{% endif %}>
+                    <span>{{ regio }}</span>
+                </label>
+                {% endfor %}
+            </div>
+            <div class="add-plaats">
+                <input type="text" id="nieuwe-plaats" placeholder="Plaatsnaam toevoegen...">
+                <button type="button" id="plaats-toevoegen">Plaats toevoegen</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Status</h2>
+            <div class="checkbox-toolbar">
+                <button type="button" class="link-button" data-select-all="#status-grid">Alles selecteren</button>
+                <button type="button" class="link-button" data-select-none="#status-grid">Alles wissen</button>
+            </div>
+            <div class="checkbox-grid" id="status-grid">
+                {% for status in statussen %}
+                <label class="checkbox">
+                    <input type="checkbox" name="status" value="{{ status }}" {% if status in status_standaard %}checked{% endif %}>
+                    <span>{{ status }}</span>
+                </label>
+                {% endfor %}
+            </div>
+
+            <h2>Bouwcategorie</h2>
+            <div class="checkbox-grid">
+                {% for cat in bouwcategorieen %}
+                <label class="checkbox">
+                    <input type="radio" name="bouwcategorie" value="{{ cat }}" {% if cat in bouwcategorie_standaard %}checked{% endif %}>
+                    <span>{{ cat }}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Gewenste gegevens</h2>
+            <div class="checkbox-grid">
+                {% for key, label in kolommen.items() %}
+                <label class="checkbox">
+                    <input type="checkbox" name="kolom" value="{{ key }}" {% if key in kolommen_standaard %}checked{% endif %}>
+                    <span>{{ label }}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </section>
+
+        {% if fout == "regio_verplicht" %}
+        <p class="melding melding-fout">Selecteer minimaal één regio voordat je een nieuwe scan start.</p>
+        {% endif %}
+        <div class="analyse-knoppen">
+            <button type="submit" class="primary-button">Analyse huidige database</button>
+            <button type="submit" formaction="{{ url_for('scan_start') }}" formmethod="post" id="nieuwe-scan-knop" class="secondary-button">Nieuwe scan uitvoeren</button>
+        </div>
+    </div>
+
+    <div id="panel-bedrijfsmatig" class="panel {% if actieve_tab != 'bedrijfsmatig' %}hidden{% endif %}">
+        <section class="card">
+            <h2>Regio</h2>
+            <div class="checkbox-toolbar">
+                <button type="button" class="link-button" data-select-all="#business-regio-grid">Alles selecteren</button>
+                <button type="button" class="link-button" data-select-none="#business-regio-grid">Alles wissen</button>
+            </div>
+            <div class="checkbox-grid" id="business-regio-grid">
+                {% for regio in regios %}
+                <label class="checkbox">
+                    <input type="checkbox" name="business_plaats" value="{{ regio }}" {% if regio in business_regio_standaard %}checked{% endif %}>
+                    <span>{{ regio }}</span>
+                </label>
+                {% endfor %}
+            </div>
+            <div class="add-plaats">
+                <input type="text" id="business-nieuwe-plaats" placeholder="Plaatsnaam toevoegen...">
+                <button type="button" id="business-plaats-toevoegen">Plaats toevoegen</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Objectcategorie</h2>
+            <div class="checkbox-grid">
+                {% for cat in business_categorieen %}
+                <label class="checkbox">
+                    <input type="checkbox" name="business_categorie" value="{{ cat }}" {% if cat in business_categorie_standaard %}checked{% endif %}>
+                    <span>{{ cat }}</span>
+                </label>
+                {% endfor %}
+            </div>
+
+            <h2>Transactietype / aanbod</h2>
+            <div class="checkbox-grid">
+                {% for tt in business_transactietypes %}
+                <label class="checkbox">
+                    <input type="radio" name="business_transactietype" value="{{ tt }}" {% if tt == business_transactietype_standaard %}checked{% endif %}>
+                    <span>{{ tt }}</span>
+                </label>
+                {% endfor %}
+            </div>
+
+            <h2>Status</h2>
+            <div class="checkbox-toolbar">
+                <button type="button" class="link-button" data-select-all="#business-status-grid">Alles selecteren</button>
+                <button type="button" class="link-button" data-select-none="#business-status-grid">Alles wissen</button>
+            </div>
+            <div class="checkbox-grid" id="business-status-grid">
+                {% for status in business_statussen %}
+                <label class="checkbox">
+                    <input type="checkbox" name="business_status" value="{{ status }}" {% if status in business_status_standaard %}checked{% endif %}>
+                    <span>{{ status }}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </section>
+
+        {% if fout == "business_regio_verplicht" %}
+        <p class="melding melding-fout">Selecteer minimaal één regio voordat je een nieuwe Business-scan start.</p>
+        {% elif fout == "business_categorie_verplicht" %}
+        <p class="melding melding-fout">Selecteer minimaal één objectcategorie voordat je een nieuwe Business-scan start.</p>
+        {% endif %}
+        <div class="analyse-knoppen">
+            <button type="submit" class="primary-button" formaction="{{ url_for('business_analyse') }}" formmethod="get">Analyse huidige database</button>
+            <button type="submit" formaction="{{ url_for('business_scan_start') }}" formmethod="post" id="nieuwe-business-scan-knop" class="secondary-button">Nieuwe scan uitvoeren</button>
+        </div>
+        <p class="notice">
+            De Business-scanner opent een apart, zichtbaar Chrome-venster en kan om een handmatige
+            menscontrole vragen. De scan-scope wordt bepaald door de geselecteerde regio's en categorieën
+            hierboven; status en transactietype zijn alleen analysefilters.
+        </p>
+    </div>
+</form>
+{% endblock %}

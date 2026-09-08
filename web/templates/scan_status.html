@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Scanstatus - Makelaar Monitor{% endblock %}
+
+{% block content %}
+<a class="back-link" href="{{ url_for('index') }}">&larr; Terug naar filters</a>
+
+{% if geblokkeerd %}
+<h1>Kan geen nieuwe scan starten</h1>
+<p class="melding">Er draait op dit moment al een andere scan (woningen of Business). Er kan maar één scan tegelijk actief zijn. Wacht tot deze is afgerond en probeer het daarna opnieuw.</p>
+<a class="secondary-button" href="{{ url_for('business_scan_status_pagina') }}">Bekijk Business-scanstatus</a>
+
+{% elif scan.status == "running" %}
+<meta http-equiv="refresh" content="5">
+<h1>Scan wordt uitgevoerd</h1>
+<div class="card">
+    <div class="analyse-context">
+        <span><strong>Regio's:</strong> {{ scan.regios | join(", ") }}</span>
+        <span><strong>Gestart om:</strong> {{ scan.gestart_om_weergave }}</span>
+        <span><strong>Status:</strong> Scan wordt uitgevoerd</span>
+    </div>
+    <p class="notice">
+        De scanner opent een apart, zichtbaar Chrome-venster en kan om een handmatige bevestiging
+        vragen (bijvoorbeeld "Druk ENTER zodra de resultaten zichtbaar zijn" of een captcha-controle).
+        Kijk in het consolevenster waarin <code>py app.py</code> draait: als daar een vraag staat,
+        beantwoord die daar. Deze pagina ververst zelf elke 5 seconden.
+    </p>
+</div>
+
+{% elif scan.status == "success" %}
+<h1>Scan succesvol voltooid</h1>
+<div class="card">
+    <div class="analyse-context">
+        <span><strong>Regio's:</strong> {{ scan.regios | join(", ") }}</span>
+        <span><strong>Scanmoment:</strong> {{ scan.scanmoment_weergave }}</span>
+        <span><strong>Aantal gevonden objecten:</strong> {{ scan.aantal_objecten if scan.aantal_objecten is not none else "-" }}</span>
+        <span><strong>Scanbestand:</strong> {{ scan.csv_naam }}</span>
+    </div>
+    {% if scan.historie_ok %}
+    <p class="notice">Historie bijgewerkt: {{ scan.historie_melding }}</p>
+    {% else %}
+    <p class="melding melding-fout">Historie NIET bijgewerkt: {{ scan.historie_melding }}</p>
+    {% endif %}
+    <div class="analyse-knoppen">
+        <a class="primary-button" href="{{ url_for('analyse', plaats=scan.regios, status='Beschikbaar', bouwcategorie='Bestaande bouw', kolom=kolommen_standaard) }}">Bekijk analyse</a>
+        <a class="secondary-button" href="{{ url_for('index') }}">Nieuwe scan starten</a>
+    </div>
+</div>
+
+{% elif scan.status == "error" %}
+<h1>Scan mislukt</h1>
+<section class="card melding melding-fout">
+    <div class="analyse-context">
+        <span><strong>Regio's:</strong> {{ scan.regios | join(", ") if scan.regios else "-" }}</span>
+        <span><strong>Gestart om:</strong> {{ scan.gestart_om_weergave if scan.gestart_om_weergave else "-" }}</span>
+    </div>
+    <p>{{ scan.foutmelding }}</p>
+    <a class="secondary-button" href="{{ url_for('index') }}">Terug naar filters</a>
+</section>
+
+{% else %}
+<h1>Geen actieve scan</h1>
+<p class="melding">Er is nog geen scan gestart. Ga terug naar het hoofdscherm om een nieuwe scan te starten.</p>
+{% endif %}
+{% endblock %}

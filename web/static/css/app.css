@@ -1,0 +1,493 @@
+:root {
+    --kleur-achtergrond: #f4f6f9;
+    --kleur-oppervlak: #ffffff;
+    --kleur-rand: #dfe4ea;
+    --kleur-tekst: #1c2733;
+    --kleur-tekst-zacht: #5b6b7c;
+    --kleur-primair: #123a63;
+    --kleur-primair-donker: #0c2947;
+    --kleur-accent: #2f6fed;
+    --kleur-succes: #1b7a4b;
+    --kleur-fout: #b3261e;
+    --radius: 10px;
+    --schaduw: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.06);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--kleur-achtergrond);
+    color: var(--kleur-tekst);
+    line-height: 1.5;
+}
+
+a {
+    color: var(--kleur-accent);
+}
+
+h1, h2 {
+    color: var(--kleur-primair-donker);
+    margin-top: 0;
+}
+
+h1 {
+    font-size: 1.75rem;
+}
+
+h2 {
+    font-size: 1.05rem;
+    margin-bottom: 0.75rem;
+}
+
+/* --- Topbar --- */
+.topbar {
+    background: var(--kleur-primair);
+    box-shadow: var(--schaduw);
+}
+
+.topbar-inner {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0.9rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.brand {
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 1.15rem;
+    text-decoration: none;
+    letter-spacing: 0.01em;
+}
+
+.topnav a {
+    color: #dbe6f6;
+    text-decoration: none;
+    margin-left: 1.5rem;
+    font-size: 0.95rem;
+}
+
+.topnav a:hover {
+    color: #ffffff;
+}
+
+/* --- Layout --- */
+.page {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+}
+
+.footer {
+    text-align: center;
+    color: var(--kleur-tekst-zacht);
+    font-size: 0.8rem;
+    padding: 1.5rem;
+}
+
+.hero {
+    margin-bottom: 1.5rem;
+}
+
+.subtitle {
+    color: var(--kleur-tekst-zacht);
+    margin-top: 0.25rem;
+}
+
+/* --- Tabs --- */
+.tabbar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.tab {
+    border: 1px solid var(--kleur-rand);
+    background: var(--kleur-oppervlak);
+    color: var(--kleur-tekst-zacht);
+    padding: 0.65rem 1.25rem;
+    border-radius: var(--radius);
+    font-size: 0.95rem;
+    cursor: pointer;
+}
+
+.tab.active {
+    background: var(--kleur-primair);
+    border-color: var(--kleur-primair);
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.panel.hidden {
+    display: none;
+}
+
+/* --- Cards --- */
+.card {
+    background: var(--kleur-oppervlak);
+    border: 1px solid var(--kleur-rand);
+    border-radius: var(--radius);
+    box-shadow: var(--schaduw);
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.25rem;
+}
+
+/* --- Checkboxes --- */
+.checkbox-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem 1.25rem;
+    margin-bottom: 1rem;
+}
+
+.checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.92rem;
+    cursor: pointer;
+}
+
+.checkbox input {
+    accent-color: var(--kleur-accent);
+    width: 16px;
+    height: 16px;
+}
+
+.add-plaats {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.add-plaats input[type="text"] {
+    flex: 1;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--kleur-rand);
+    border-radius: var(--radius);
+    font-size: 0.92rem;
+}
+
+.checkbox-toolbar {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.link-button {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--kleur-accent);
+    font-size: 0.85rem;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.link-button:hover {
+    color: #2559c4;
+}
+
+.analyse-knoppen {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 0.25rem;
+}
+
+.hidden {
+    display: none;
+}
+
+.notice {
+    background: #eef3fb;
+    border: 1px solid #d3e0f4;
+    color: var(--kleur-primair-donker);
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+}
+
+.placeholder {
+    color: var(--kleur-tekst-zacht);
+    font-style: italic;
+}
+
+.melding {
+    color: var(--kleur-tekst-zacht);
+}
+
+.melding-fout p {
+    color: var(--kleur-fout);
+    font-weight: 500;
+}
+
+/* --- Buttons --- */
+.primary-button,
+.secondary-button,
+.add-plaats button {
+    border: none;
+    border-radius: var(--radius);
+    padding: 0.7rem 1.4rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.primary-button {
+    background: var(--kleur-accent);
+    color: #ffffff;
+}
+
+.primary-button:hover {
+    background: #2559c4;
+}
+
+.add-plaats button {
+    background: var(--kleur-primair);
+    color: #ffffff;
+    padding: 0.55rem 1rem;
+    font-weight: 500;
+}
+
+.secondary-button {
+    background: var(--kleur-oppervlak);
+    color: var(--kleur-primair);
+    border: 1px solid var(--kleur-rand);
+    text-decoration: none;
+    display: inline-block;
+}
+
+.secondary-button:hover {
+    border-color: var(--kleur-primair);
+}
+
+.secondary-button[disabled] {
+    color: var(--kleur-tekst-zacht);
+    cursor: not-allowed;
+}
+
+.back-link {
+    display: inline-block;
+    margin-bottom: 1rem;
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+/* --- KPI cards --- */
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin: 1.25rem 0;
+}
+
+.kpi-card {
+    background: var(--kleur-oppervlak);
+    border: 1px solid var(--kleur-rand);
+    border-radius: var(--radius);
+    box-shadow: var(--schaduw);
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.kpi-label {
+    color: var(--kleur-tekst-zacht);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.kpi-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--kleur-primair-donker);
+}
+
+.kpi-sublabel {
+    color: var(--kleur-tekst-zacht);
+    font-size: 0.72rem;
+}
+
+.kpi-card.berekend {
+    border-style: dashed;
+}
+
+.kpi-card.kerncijfer {
+    border: 2px solid var(--kleur-accent);
+    background: #eef4ff;
+}
+
+.kpi-card.kerncijfer .kpi-value.groot {
+    font-size: 1.8rem;
+}
+
+.kpi-grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.sectie-titel {
+    margin-top: 2rem;
+}
+
+.subtabel-titel {
+    color: var(--kleur-tekst-zacht);
+    font-size: 0.85rem;
+    margin: -0.5rem 0 0.75rem;
+}
+
+/* --- Analyse-context --- */
+.analyse-context {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    background: var(--kleur-oppervlak);
+    border: 1px solid var(--kleur-rand);
+    border-radius: var(--radius);
+    padding: 0.75rem 1.25rem;
+    margin-bottom: 1.25rem;
+    font-size: 0.85rem;
+    color: var(--kleur-tekst-zacht);
+}
+
+.analyse-context strong {
+    color: var(--kleur-primair-donker);
+    font-weight: 600;
+}
+
+.tabel-link {
+    color: var(--kleur-accent);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.tabel-link:hover {
+    text-decoration: underline;
+}
+
+/* --- Export bar --- */
+.export-bar {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+    flex-wrap: wrap;
+}
+
+/* --- Table --- */
+.table-wrap {
+    background: var(--kleur-oppervlak);
+    border: 1px solid var(--kleur-rand);
+    border-radius: var(--radius);
+    box-shadow: var(--schaduw);
+    overflow-x: auto;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.data-table th,
+.data-table td {
+    text-align: left;
+    padding: 0.65rem 1rem;
+    border-bottom: 1px solid var(--kleur-rand);
+    white-space: nowrap;
+}
+
+.data-table thead th {
+    background: #f0f3f8;
+    color: var(--kleur-primair-donker);
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    position: sticky;
+    top: 0;
+}
+
+.data-table thead th.sort-asc::after {
+    content: " \25B2";
+    font-size: 0.7em;
+}
+
+.data-table thead th.sort-desc::after {
+    content: " \25BC";
+    font-size: 0.7em;
+}
+
+.data-table tbody tr:hover {
+    background: #f7f9fc;
+}
+
+/* --- Compacte tabellen (Business-pagina): geen horizontaal scrollen op
+   normale desktopbreedte. Alleen van toepassing op tabellen met deze extra
+   klasse; .data-table zelf (o.a. de woningen-resultaatpagina) blijft
+   ongewijzigd. --- */
+.data-table-compact {
+    table-layout: fixed;
+}
+
+.data-table-compact th,
+.data-table-compact td {
+    white-space: normal;
+    word-break: break-word;
+    padding: 0.55rem 0.65rem;
+    font-size: 0.85rem;
+    vertical-align: top;
+}
+
+.data-table-compact td.wrap-cell {
+    word-break: break-word;
+}
+
+.data-table-compact th.num,
+.data-table-compact td.num {
+    text-align: right;
+}
+
+.dagen-tooltip {
+    cursor: help;
+    border-bottom: 1px dotted var(--kleur-tekst-zacht);
+}
+
+/* --- Responsive --- */
+@media (max-width: 768px) {
+    .checkbox-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .kpi-grid,
+    .kpi-grid-3 {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .topbar-inner {
+        flex-direction: column;
+        gap: 0.5rem;
+        align-items: flex-start;
+    }
+}
+
+@media (max-width: 480px) {
+    .checkbox-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .kpi-grid,
+    .kpi-grid-3 {
+        grid-template-columns: 1fr;
+    }
+
+    .add-plaats {
+        flex-direction: column;
+    }
+}

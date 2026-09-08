@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}Business-scanstatus - Makelaar Monitor{% endblock %}
+
+{% block content %}
+<a class="back-link" href="{{ url_for('index') }}">&larr; Terug naar filters</a>
+
+{% if geblokkeerd %}
+<h1>Kan geen nieuwe Business-scan starten</h1>
+<p class="melding">Er draait op dit moment al een andere scan (woningen of Business). Er kan maar één scan tegelijk actief zijn. Wacht tot deze is afgerond en probeer het daarna opnieuw.</p>
+<a class="secondary-button" href="{{ url_for('scan_status_pagina') }}">Bekijk woningen-scanstatus</a>
+
+{% elif scan.status == "running" or scan.status == "importing" %}
+<meta http-equiv="refresh" content="5">
+<h1>{{ "Business-scan wordt uitgevoerd" if scan.status == "running" else "Scanner klaar, historie-import bezig" }}</h1>
+<div class="card">
+    <div class="analyse-context">
+        <span><strong>Regio's:</strong> {{ scan.plaatsen | join(", ") if scan.plaatsen else "-" }}</span>
+        <span><strong>Categorieën:</strong> {{ scan.categorieen | join(", ") if scan.categorieen else "-" }}</span>
+        <span><strong>Gestart om:</strong> {{ scan.gestart_om_weergave if scan.gestart_om_weergave else "-" }}</span>
+        <span><strong>Status:</strong> {{ "Scan wordt uitgevoerd" if scan.status == "running" else "Historie-import bezig" }}</span>
+    </div>
+    {% if scan.status == "running" %}
+    <p class="notice">
+        Controleer het Chrome-venster. Als Funda een menscontrole toont, los deze handmatig op en druk daarna
+        indien gevraagd ENTER in de console waarin <code>py app.py</code> draait.
+    </p>
+    {% else %}
+    <p class="notice">De scanner is klaar; de gevonden objecten worden nu automatisch in de Business-historie geïmporteerd.</p>
+    {% endif %}
+    <p class="melding">Deze pagina ververst zelf elke 5 seconden.</p>
+</div>
+
+{% elif scan.status == "success" %}
+<h1>Business-scan volledig geslaagd</h1>
+<div class="card">
+    <div class="analyse-context">
+        <span><strong>Regio's:</strong> {{ scan.plaatsen | join(", ") if scan.plaatsen else "-" }}</span>
+        <span><strong>Categorieën:</strong> {{ scan.categorieen | join(", ") if scan.categorieen else "-" }}</span>
+        <span><strong>Starttijd:</strong> {{ scan.gestart_om_weergave if scan.gestart_om_weergave else "-" }}</span>
+        <span><strong>Eindtijd:</strong> {{ scan.eind_om_weergave if scan.eind_om_weergave else "-" }}</span>
+        <span><strong>Aantal objecten (CSV):</strong> {{ scan.aantal_objecten if scan.aantal_objecten is not none else "-" }}</span>
+        <span><strong>CSV-bestand:</strong> {{ scan.csv_naam if scan.csv_naam else "-" }}</span>
+    </div>
+    <p class="notice">Historie-import geslaagd: {{ scan.historie_melding }}</p>
+
+    {% if scan.mutatie_samenvatting %}
+        {% if scan.mutatie_samenvatting.nulmeting %}
+        <p class="melding">
+            Dit is de eerste opgeslagen scan (nulmeting) voor deze combinatie van regio's en categorieën -
+            er is nog geen vorige vergelijkbare scan om mee te vergelijken.
+        </p>
+        {% elif scan.mutatie_samenvatting.mutaties %}
+        <p class="subtabel-titel">Mutaties t.o.v. de vorige vergelijkbare scan:</p>
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr><th>Mutatie</th><th>Aantal</th></tr>
+                </thead>
+                <tbody>
+                    {% for label, aantal in scan.mutatie_samenvatting.mutaties.items() %}
+                    <tr><td>{{ label }}</td><td>{{ aantal }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    {% endif %}
+
+    <div class="analyse-knoppen">
+        <a class="primary-button" href="{{ url_for('business_analyse', business_plaats=scan.plaatsen, business_categorie=scan.categorieen, business_status=scan.statussen, business_transactietype=scan.transactietype) }}">Bekijk actuele analyse</a>
+        <a class="secondary-button" href="{{ url_for('index') }}">Nieuwe scan starten</a>
+    </div>
+</div>
+
+{% elif scan.status == "error" %}
+<h1>Business-scan mislukt</h1>
+<section class="card melding melding-fout">
+    <div class="analyse-context">
+        <span><strong>Regio's:</strong> {{ scan.plaatsen | join(", ") if scan.plaatsen else "-" }}</span>
+        <span><strong>Categorieën:</strong> {{ scan.categorieen | join(", ") if scan.categorieen else "-" }}</span>
+        <span><strong>Gestart om:</strong> {{ scan.gestart_om_weergave if scan.gestart_om_weergave else "-" }}</span>
+    </div>
+    <p>{{ scan.foutmelding }}</p>
+    <a class="secondary-button" href="{{ url_for('index') }}">Terug naar filters</a>
+</section>
+
+{% else %}
+<h1>Geen actieve Business-scan</h1>
+<p class="melding">Er is nog geen Business-scan gestart. Ga terug naar het hoofdscherm om een nieuwe scan te starten.</p>
+{% endif %}
+{% endblock %}

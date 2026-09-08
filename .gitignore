@@ -27,6 +27,14 @@ build/
 .turbo/
 coverage/
 
+# --- Makelaar Monitor data ---
+*.sqlite
+*.sqlite3
+*.db
+*.csv
+output/
+data/
+
 # --- Editor / OS ---
 .vscode/
 .idea/

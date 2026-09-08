@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Resultaat - Makelaar Monitor{% endblock %}
+
+{% block content %}
+<a class="back-link" href="{{ url_for('index') }}">&larr; Terug naar filters</a>
+
+{% if foutmelding %}
+<section class="card melding melding-fout">
+    <h1>Resultaat</h1>
+    <p>{{ foutmelding }}</p>
+</section>
+
+{% else %}
+<h1>Resultaat</h1>
+
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <span class="kpi-label">Aantal objecten</span>
+        <span class="kpi-value">{{ kpis.aantal_objecten }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Totale vraagprijs</span>
+        <span class="kpi-value">{{ kpis.totale_vraagprijs }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Gemiddelde vraagprijs</span>
+        <span class="kpi-value">{{ kpis.gemiddelde_vraagprijs }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Aantal makelaars</span>
+        <span class="kpi-value">{{ kpis.aantal_makelaars }}</span>
+    </div>
+</div>
+
+<div class="analyse-context">
+    <span><strong>Peildatum / scanmoment:</strong> {{ scaninfo.scanmoment_weergave if scaninfo else "-" }}</span>
+    <span><strong>Regio's:</strong> {{ plaatsen | join(", ") if plaatsen else "Alle regio's" }}</span>
+    <span><strong>Status:</strong> {{ statussen | join(", ") }}</span>
+    <span><strong>Bouwcategorie:</strong> {{ bouwcategorieen | join(", ") }}</span>
+</div>
+
+<div class="export-bar">
+    <a class="secondary-button" href="{{ url_for('export_csv') }}?{{ querystring }}">Export CSV</a>
+    <button type="button" class="secondary-button" disabled title="Volgt in een volgende ontwikkelfase">Export Google Sheets</button>
+    <button type="button" class="secondary-button" disabled title="Volgt in een volgende ontwikkelfase">Toevoegen aan Dashboard</button>
+</div>
+
+{% if rijen %}
+<div class="table-wrap">
+    <table id="resultaat-tabel" class="data-table">
+        <thead>
+            <tr>
+                {% for k in kolommen %}
+                <th data-type="{{ kolom_sorteertype[k] }}">{{ kolom_labels[k] }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for rij in rijen %}
+            <tr>
+                {% for k in kolommen %}
+                {% if k == "funda_url" %}
+                <td>
+                    {% if rij[k] %}
+                    <a class="tabel-link" href="{{ rij[k] }}" target="_blank" rel="noopener noreferrer">Open Funda</a>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+                {% else %}
+                <td>{{ rij[k] if rij[k] is not none and rij[k] != "" else "-" }}</td>
+                {% endif %}
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="melding">Geen passende data gevonden voor deze filters.</p>
+{% endif %}
+
+{% endif %}
+{% endblock %}
