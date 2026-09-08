@@ -3,7 +3,7 @@
 {% block title %}Scanstatus - Makelaar Monitor{% endblock %}
 
 {% block content %}
-<a class="back-link" href="{{ url_for('index') }}">&larr; Terug naar filters</a>
+<a class="back-link" href="{{ url_for('index', tab='woningen', plaats=scan.regios|default([], true)) }}">&larr; Terug naar filters</a>
 
 {% if geblokkeerd %}
 <h1>Kan geen nieuwe scan starten</h1>
@@ -42,8 +42,9 @@
     <p class="melding melding-fout">Historie NIET bijgewerkt: {{ scan.historie_melding }}</p>
     {% endif %}
     <div class="analyse-knoppen">
-        <a class="primary-button" href="{{ url_for('analyse', plaats=scan.regios, status='Beschikbaar', bouwcategorie='Bestaande bouw', kolom=kolommen_standaard) }}">Bekijk analyse</a>
-        <a class="secondary-button" href="{{ url_for('index') }}">Nieuwe scan starten</a>
+        <a class="primary-button" href="{{ url_for('analyse', plaats=scan.regios, status='Beschikbaar', bouwcategorie='Bestaande bouw', kolom=kolommen_standaard) }}">Bekijk actuele analyse</a>
+        <a class="secondary-button" href="{{ url_for('index', tab='woningen') }}">Nieuwe scan starten</a>
+        <a class="secondary-button" href="{{ url_for('dashboard') }}">Dashboard</a>
     </div>
 </div>
 
@@ -55,7 +56,7 @@
         <span><strong>Gestart om:</strong> {{ scan.gestart_om_weergave if scan.gestart_om_weergave else "-" }}</span>
     </div>
     <p>{{ scan.foutmelding }}</p>
-    <a class="secondary-button" href="{{ url_for('index') }}">Terug naar filters</a>
+    <a class="secondary-button" href="{{ url_for('index', tab='woningen', plaats=scan.regios|default([], true)) }}">Terug naar filters</a>
 </section>
 
 {% else %}

@@ -1,92 +1,92 @@
 # Makelaar Monitor — status
 
-_Laatst bijgewerkt: 2026-09-07_
+_Laatst bijgewerkt: 2026-09-08_
 
 ## Uitgevoerde opdracht
-Fase 4 van de Funda-in-Business-module: de knop "Nieuwe scan uitvoeren" bij Bedrijfsmatig vastgoed is nu functioneel. De volledige keten werkt vanuit de browser: geselecteerde regio's/categorieën → bestaande Business-scanner (subprocess) → nieuwe `*_alles.csv` → automatische import via de bestaande Business-historie-tool (subprocess) → Business-database → statuspagina → terug naar de actuele Business-analyse met dezelfde filters. Woningenfunctionaliteit blijft volledig intact.
+Gerichte uitbreiding van de WONINGEN-analysepagina (`/analyse`) zodat deze qua informatiegehalte en gebruikservaring aansluit op de bestaande Bedrijfsmatig-analyse: uitgebreide KPI's, een makelaarsanalyse-tabel, een verdeling-per-plaats-tabel, een mutatieblok (nieuw/uit aanbod, prijs-/status-/makelaar-/oppervlaktewijzigingen) en een inhoudelijk sterkere, klikbare objectentabel. Daarnaast een generieke fix van de bestaande JS-sorteerfunctie voor Nederlandse getalnotatie (gold al voor Business, nu ook correct voor Woningen). **Nog niet gecommit/gepusht** — wacht op handmatige test door de gebruiker, zoals gevraagd. Herstelpunt blijft `71b287e3708107e84c97728d0b1fd4db9d3b0452`.
 
 ## Gewijzigde bestanden
-- `app.py` — nieuwe Business-scan-paden (`BUSINESS_SCANNER_PAD`, `BUSINESS_HISTORIE_PAD`, `BUSINESS_OUTPUT_DIR`, `BUSINESS_HISTORIE_OUTPUT_DIR`); nieuw statusobject `BUSINESS_SCAN_STATE` + `BUSINESS_STATE_LOCK`; nieuwe functies `_vind_nieuwste_business_alles_csv()`, `_parse_business_historie_samenvatting()`, `_importeer_in_business_historie()`, `_voer_business_scan_uit()`; nieuwe routes `POST /business/scan/start` en `GET /business/scan/status`; `index()` uitgebreid met `actieve_tab` (zodat de pagina na een Business-validatiefout op het Bedrijfsmatig-tabblad opent); `scan_start()`/`scan_status_pagina()` (woningen) minimaal uitgebreid met een `geblokkeerd`-queryparameter bij een mislukte lock-acquisitie (zuiver additief, bestaand gedrag ongewijzigd wanneer die parameter afwezig is).
-- `web/templates/business_scan_status.html` — **nieuw**: statuspagina voor de Business-scan (running/importing/success/error/geblokkeerd/idle), met auto-refresh tijdens een actieve scan en de vaste menscontrole-tekst.
-- `web/templates/scan_status.html` (woningen) — één additieve `{% if geblokkeerd %}`-tak toegevoegd vóór de bestaande takken; alle bestaande takken/gedrag ongewijzigd.
-- `web/templates/index.html` — tabweergave en panelen nu servergestuurd via `actieve_tab` (in plaats van altijd hardcoded op Woningen actief); Business-validatiemeldingen toegevoegd; de "Nieuwe scan uitvoeren"-knop bij Bedrijfsmatig vastgoed is niet langer `disabled` en verzendt nu echt naar `/business/scan/start`.
-- `web/static/js/app.js` — nieuwe `initNieuweBusinessScanValidatie()` (analoog aan de bestaande woningen-validatie: minimaal 1 regio én minimaal 1 categorie vereist vóór verzenden), aangeroepen vanuit `DOMContentLoaded`.
+- `app.py`:
+  - `KOLOMMEN_STANDAARD` uitgebreid van 6 naar 15 kolommen (adres, plaats, status, bouwcategorie, vraagprijs, woonoppervlakte, perceeloppervlakte, slaapkamers, energielabel, prijs_per_m2, makelaar, eerste_waarneming, laatste_waarneming, dagen_in_monitor, funda_url) — dit zijn ALLEMAAL kolommen die al in de bestaande `KOLOMMEN`-dict/tabelinfrastructuur bestonden; alleen de standaard-selectie is verbreed. De "Gewenste gegevens"-checkboxen op het hoofdscherm blijven volledig functioneel voor wie een smallere selectie wil.
+  - `verrijk_rij()`: `woonoppervlakte`/`perceeloppervlakte` krijgen nu dezelfde opmaak-behandeling als `vraagprijs` al had (bv. "196 m²" i.p.v. de rauwe Python-`float`-weergave "196.0").
+  - `bereken_kpis()` fors uitgebreid (backwards compatible: alle bestaande sleutels blijven bestaan) met status-subtellingen (Beschikbaar/Onder bod/Verkocht onder voorbehoud), mediaan vraagprijs, gemiddelde/mediaan €/m², totaal bekende woonoppervlakte.
+  - Nieuw: `bouw_makelaarstabel()`, `bouw_plaatsverdeling()`, `haal_vorige_scan_id()`, `haal_scan_snapshot()`, `woning_mutatie_naam()`, `woning_mutatie_details()`, `woning_bouw_mutaties()` — allemaal naar hetzelfde patroon als de al bestaande Business-equivalenten, maar met woningen-specifieke velden (vraagprijs/status/makelaar/woonoppervlakte, funda_url als sleutel i.p.v. funda_object_id).
+  - `bouw_analyseresultaat()`: bouwt nu ook `makelaarstabel`, `plaatsverdeling`, `mutatie_aantallen`, `mutatie_rijen`, `vorige_scanmoment_weergave` op, allemaal uit dezelfde SQLite-query-pipeline (geen losse databronnen, geen browserstate).
+  - `analyse()`-route geeft deze nieuwe velden door aan het template.
+- `web/templates/resultaat.html` — grondig uitgebreid: 11 KPI-kaarten, "Aanbod per makelaar"-tabel (compacte stijl, hergebruikt de bestaande `.data-table-compact`-CSS-klasse van Business), "Verdeling per plaats"-tabel (alleen zichtbaar bij >1 plaats in de selectie), mutatieblok (kpi-grid-3 met 7 categorieën + detailtabel), objectentabel met klikbaar Adres (naar Funda) en de verbrede standaardkolommenset. Actiebalk samengevoegd tot één rij: Terug naar filters / Nieuwe scan uitvoeren / Dashboard / Export CSV. De disabled "Export Google Sheets"- en "Toevoegen aan Dashboard"-knoppen zijn verwijderd (expliciet gevraagd: CSV is de enige exportfunctie die nu nodig is, geen verwarrende dode knoppen).
+- `web/static/js/app.js` — `parseGetal()` generiek robuust gemaakt voor Nederlandse getalnotatie (duizendtal-punt correct verwijderd, komma als decimaalteken herkend, niet-cijfertekens zoals "m²"/"dagen" genegeerd). Dit is dezelfde functie die door zowel de woningen- als de Business-objectentabel wordt gebruikt (`sorteerTabel()`/`initSorteerbareTabel()`, ongewijzigd) — dus de al langer bekende Business-beperking (duizendtal-punt verkeerd als decimaalteken gelezen) is hiermee voor **beide** modules verholpen, zonder de rest van de sorteerlogica aan te raken.
 - `docs/CLAUDE_STATUS.md` — dit overdrachtsbestand.
 
-Niet gewijzigd (geverifieerd via bestandstijdstempels vóór en na deze fase): `scanner/funda_business_scanner_v1.py`, `scanner/makelaarsmonitor_v41.py`, `historie/funda_business_historie_v1.py`, `historie/makelaarsmonitor_historie_v10.py`, `data/funda_business_historie.sqlite`, `data/makelaarsmonitor_historie.sqlite` (hoofdbestanden ongewijzigd van grootte/mtime; alleen `-wal`/`-shm`-sidecars aangeraakt door read-only testconnecties, inherent aan WAL-mode, 0-byte `-wal`-bestand bevestigt geen openstaande schrijfacties).
+Niet gewijzigd: `scanner/makelaarsmonitor_v41.py`, `scanner/funda_business_scanner_v1.py`, `historie/makelaarsmonitor_historie_v10.py`, `historie/funda_business_historie_v1.py` (bestandstijdstempels geverifieerd ongewijzigd), `web/templates/business_resultaat.html`/`business_scan_status.html`/`index.html`/`base.html`/`scan_status.html`, `web/static/css/app.css` (de gebruikte klassen `.kpi-card.kerncijfer`, `.kpi-grid-3`, `.data-table-compact` bestonden al van de vorige UX-harmonisatieronde en zijn hergebruikt, niet opnieuw gewijzigd). Geen databaseschema-wijziging — alle nieuwe functies zijn pure `SELECT`-queries op de al bestaande `scans`/`snapshots`-tabellen.
 
-## Waarom de Business-scanner niet is gewijzigd
-De opdracht vroeg om eerst te controleren welke CLI-argumenten de bestaande scanner al ondersteunt. `scanner/funda_business_scanner_v1.py` bleek al een `--objecttypes {Kantoor,Bedrijfsruimte}`-argument te hebben (default: beide) — functioneel identiek aan de gevraagde categorie-selectie. Er was dus geen enkele wijziging aan de scanner nodig; `app.py` roept 'm aan met `--plaatsen <geselecteerde regio's> --objecttypes <geselecteerde categorieën> --output-map output/bedrijfsmatig`.
+## Nieuwe woning-KPI's (sectie 2)
+| KPI | Berekening |
+|---|---|
+| Actief aanbod | Aantal objecten in de huidige selectie (na plaats/status/bouwcategorie-filter) |
+| Beschikbaar / Onder bod / Verkocht onder voorbehoud | Subtelling per status BINNEN de huidige selectie (net als bij Business: filtert de gebruiker al op één status, dan tellen de andere logischerwijs 0) |
+| Totale bekende vraagwaarde | Som van `vraagprijs` over de selectie (visueel gemarkeerd als "kerncijfer", zelfde stijl als de Business-hoofdwaarden) |
+| Gemiddelde / mediaan vraagprijs | Over objecten met bekende `vraagprijs` |
+| Gemiddelde / mediaan prijs per m² | `vraagprijs / woonoppervlakte` per object, alleen waar beide bekend en > 0 zijn |
+| Totaal bekende woonoppervlakte | Som van `woonoppervlakte` over objecten waar dat bekend is |
+| Aantal makelaars | Aantal unieke, niet-lege `makelaar`-waarden in de selectie |
 
-## Eén globale scan-lock (bewuste keuze, zoals voorkeur gebruiker)
-`app.py` had al `SCAN_RUNNING_LOCK` voor de woningenscan. In plaats van een aparte lock voor Business, hergebruikt `business_scan_start()` **exact hetzelfde lock-object**: dat maakt er zonder enige wijziging aan de bestaande woningen-lock-logica één gedeelde globale lock van over beide scantypes. Reden (conform de expliciete voorkeur uit de opdracht): beide scanners openen een zichtbaar Chrome-venster en leunen op dezelfde interactieve console voor ENTER/menscontrole — gelijktijdig draaien zou dat door elkaar halen. `BUSINESS_SCAN_STATE`/`BUSINESS_STATE_LOCK` blijven wél een eigen, van woningen gescheiden statusobject (geen inhoudelijke vermenging, alleen de mutex is gedeeld). Dit was zonder regressierisico mogelijk: de bestaande woningenroutes zijn functioneel ongewijzigd, alleen een optionele `geblokkeerd`-queryparameter is toegevoegd voor een duidelijkere melding wanneer de lock al bezet is door de andere scan.
+Geen enkele waarde wordt verzonnen: ontbrekende data resulteert in "-", nooit in een aanname.
 
-## Scan-scope vs. analysefilter
-Zoals gevraagd: de scan-scope wordt uitsluitend bepaald door de geselecteerde **regio's** en **categorieën**. Status en transactietype worden bij het starten van een scan wél meegestuurd/onthouden (om na afloop naar exact dezelfde analyseweergave terug te kunnen linken), maar sturen de scanner zelf niet aan — die haalt altijd beide prijssoorten per object op.
+## Bouwcategorie (sectie 3)
+Ongewijzigd: `bouwcategorie` komt rechtstreeks uit de database (al bepaald door de bestaande historie-tool volgens de daar al vastgelegde regel — geen nieuwe classificatielogica toegevoegd). Het bestaande filter (`bouwcategorie IN (...)` in `haal_snapshotrijen()`) filtert de rijen al vóórdat KPI's/makelaarstabel/plaatsverdeling worden berekend, dus "Bestaande bouw" bevat gegarandeerd geen nieuwbouw-objecten in de makelaarsvergelijking (expliciet getest). De actieve bouwcategorie staat zichtbaar in de bestaande `.analyse-context`-balk.
 
-## Exacte scanidentiteit
-`app.py` geeft de door de gebruiker geselecteerde plaatsen/categorieën ongewijzigd door aan zowel de scanner (`--plaatsen`, `--objecttypes`) als de historie-tool (`--plaatsen`, `--categorieen`) — identieke lijsten, geen verbreding/versmalling. De historie-tool bepaalt zelf de canonieke identiteit (sortering/uniek/samenvoegen) zoals in Fase 2/3 al vastgelegd; daar is niets aan gewijzigd.
+## Makelaarsanalyse (sectie 4)
+Kolommen: Makelaar, Objecten, Marktaandeel, Totale vraagwaarde, Gem. vraagprijs, Mediaan vraagprijs, Gem. €/m², Woonoppervlak. Marktaandeel = `aantal objecten van makelaar / totaal objecten in de HUIDIGE selectie × 100` (dezelfde noemer-logica als bij Business). Compacte tabelstijl (`data-table-compact` + `colgroup`, geen horizontaal scrollen op normale desktopbreedte), sortering standaard op aantal objecten aflopend.
 
-## Succes-/foutafhandeling
-- Scanner-subprocess zonder stdin/stdout/stderr-omleiding (zelfde reden als bij woningen: laat de zichtbare Chrome + interactieve ENTER-/menscontrole-flow in hetzelfde consolevenster werken). Geen `shell=True`, overal `sys.executable`.
-- Na een succesvolle scanner-run wordt uitsluitend het nieuwste `funda_business_*_alles.csv`-bestand gekozen (mtime ≥ scan-starttijd − 2s); `*_checkpoint.csv` wordt door het glob-patroon zelf al nooit gekozen.
-- Scanner-exitcode ≠ 0 → geen historie-import, status "error", geen traceback aan de gebruiker.
-- Historie-import (niet-interactief) loopt via `subprocess.run` met capture van stdout/stderr naar een logbestand `output/bedrijfsmatig/_business_historie_import_log_<stamp>.txt`; bij een fout daar wordt alleen de laatste zinvolle regel getoond (nooit een volledige Python-traceback).
-- Dubbele import: de historie-tool herkent dit zelf via `scan_hash` en beëindigt netjes (geen foutmelding, geen crash) — de webapp toont in dat geval gewoon de succesmelding van de subprocess-aanroep.
-- Bij succes toont de statuspagina: regio's, categorieën, starttijd, eindtijd, aantal objecten (CSV), CSV-bestandsnaam, "Historie-import geslaagd"-melding, en (best-effort, uit de tekstuitvoer van de historie-tool geparsed) een nulmeting-melding of een tabelletje met mutatieaantallen — puur informatief, nooit een verzonnen getal.
-- Knop "Bekijk actuele analyse" linkt naar `/business/analyse` met exact dezelfde regio's/categorieën/status/transactietype als bij het starten van de scan.
+## Mutatielogica (sectie 5/6)
+- Vergelijkt de VOLLEDIGE, ongefilterde snapshot van de huidige scan met de meest recente EERDERE scan die EXACT hetzelfde `gebied` heeft (het gebied van de scan zelf zoals opgeslagen door de historie-tool — niet de eventueel smallere plaats-filter die de gebruiker net heeft gekozen). Dit is bewust hetzelfde principe als bij Business: een objectieve scanvergelijking, geen weergavefilter.
+- Categorieën: Nieuw aanbod, Uit aanbod, Vraagprijs gewijzigd, Status gewijzigd, Makelaar gewijzigd, Oppervlakte gewijzigd, Ongewijzigd (kan gecombineerd voorkomen, bv. "Vraagprijs gewijzigd + Status gewijzigd").
+- "Uit aanbod" betekent uitsluitend: object niet meer aangetroffen in de volgende scan. **Nooit** automatisch geïnterpreteerd als verkocht/verhuurd/transactie afgerond — expliciet in de UI-tekst benoemd en in tests geverifieerd.
+- Detailtabel toont per gewijzigd object: Adres, Plaats, Mutatie, Wijziging (bv. "Vraagprijs: € 625.000 → € 599.000", "Status: Beschikbaar → Onder bod"), Makelaar, Funda-link. Oude/nieuwe waarden worden alleen getoond wanneer beide kanten van de vergelijking daadwerkelijk bestaan (dus nooit bij Nieuw/Uit aanbod).
+- Als er geen vorige vergelijkbare scan bestaat (nulmeting voor dat exacte gebied) verschijnt het hele mutatieblok simpelweg niet — geen misleidende "0 mutaties"-melding.
 
-## Bekende beperking (zoals gevraagd te documenteren)
-Bij een herstart van de Flask-app tijdens een lopende scan gaat de in-memory status (`SCAN_STATE`/`BUSINESS_SCAN_STATE`, beide locks) verloren — dit was al zo voor woningen en is in Fase 4 bewust niet veranderd (geen aanvullende persistentie toegevoegd, blijft buiten scope).
+## Verdeling per plaats (sectie 7)
+Compacte tabel (Plaats, Aantal, Beschikbaar, Onder bod, VOV, Totale vraagwaarde, Gem. €/m²) — wordt in het template alleen getoond als de huidige selectie objecten uit **meer dan één** plaats bevat; bij één plaats vervalt de tabel (visueel netter, zoals gevraagd).
 
-## Tests
-Automatisch getest (venv + `flask.test_client()` + gemockte `subprocess.Popen`/`subprocess.run`, **geen live Funda-scan**), 59 checks, 0 gefaald:
-1–2. Validatie zonder regio/zonder categorie → nette redirect + melding op het juiste (Bedrijfsmatig-)tabblad. ✅
-3. Business-scan-lock: tweede poging tijdens een actieve Business-scan start geen tweede subprocess en toont de bestaande status. ✅
-4–5. Globale lock werkt in beide richtingen: een actieve woningen-scan blokkeert een Business-scan en andersom (beide met een duidelijke "geblokkeerd"-melding + link naar de andere statuspagina). ✅
-6–9, 12. Subprocess-commando's geverifieerd: juiste `--plaatsen`/`--objecttypes` naar de scanner, juiste `--plaatsen`/`--categorieen` naar de historie-tool, juiste `--output-map`, `sys.executable` gebruikt, nergens `shell=True`. ✅
-10–11. Alleen de nieuwe `*_alles.csv` (op mtime) wordt gekozen; een `*_checkpoint.csv` wordt nooit als resultaat herkend. ✅
-13. Scanner-exitcode ≠ 0 → historie-tool wordt niet aangeroepen. ✅
-14. Gesimuleerde historie-fout → status "error", geen volledige traceback in de getoonde melding. ✅
-15. Volledig gemockte succesflow → status "success", juiste aantal objecten/CSV-naam/eindtijd, nulmeting correct herkend. ✅
-16. Link "Bekijk actuele analyse" bevat exact dezelfde regio/categorie/status/transactietype-parameters als de gestarte scan. ✅
-17. Business-analyse-regressie (vóór een nieuwe scan): Actief aanbod 35, Kantoor 18, Bedrijfsruimte 18, Dual-listed 3, Huuraanbod 28 (23 + 5), Koopaanbod 10 (8 + 2), bekende berekende jaarhuur € 483.123, totale bekende koopvraagprijs € 19.252.000, 1 Uit aanbod (Neutronenlaan 70), 35 Ongewijzigd — allemaal exact zoals opgegeven. ✅
-18. Woningen-regressie: `/`, `/analyse`, `/scan/start`-validatie, `/scan/status`, `/dashboard` — allemaal nog status 200. ✅
-- `py -m py_compile` geslaagd voor `app.py` én (ongewijzigd) beide scanners/historie-tools; `--help` van beide Business-tools nog steeds correct (bevestigt dat de CLI intact is).
-- Bestandstijdstempels van beide scanners, beide historie-tools en beide databases: ongewijzigd t.o.v. vóór deze fase.
+## Objectentabel (sectie 8)
+Adres is nu klikbaar naar de opgeslagen Funda-URL (zelfde patroon als Business), onafhankelijk van of "Funda URL" zelf als aparte kolom is geselecteerd. Dagen in monitor hergebruikt de al bestaande `haal_geschiedenis()`/`verrijk_rij()`-logica (Eerste_waarneming/Laatste_waarneming over alle scans heen) — geen nieuwe berekening nodig. De bestaande, flexibele kolommenkiezer op het hoofdscherm is intact gebleven (bewust geen refactor naar een vast Business-achtig kolomschema, om de bestaande "Gewenste gegevens"-functionaliteit niet te breken); de standaardweergave toont nu wel alle in de opdracht gevraagde kolommen.
 
-## Live eindtest (door de gebruiker uit te voeren — bewust niet autonoom gedaan i.v.m. mogelijke menscontrole)
-1. Start `py app.py`.
-2. Open Makelaar Monitor in de browser.
-3. Ga naar het tabblad "Bedrijfsmatig vastgoed".
-4. Regio: Uden (of naar keuze).
-5. Categorieën: Kantoor + Bedrijfsruimte (of naar keuze).
-6. Klik "Nieuwe scan uitvoeren".
-7. **Controleer wat te checken is:** de statuspagina toont "Business-scan wordt uitgevoerd" met auto-refresh en de menscontrole-tekst; in het Chrome-venster dat de scanner opent, los een eventuele menscontrole/captcha handmatig op en druk zo nodig ENTER in het consolevenster waarin `py app.py` draait.
-8. Wacht tot de statuspagina "Scanner klaar, historie-import bezig" en daarna "Business-scan volledig geslaagd" toont, met regio's/categorieën/starttijd/eindtijd/aantal objecten/CSV-bestandsnaam en de historie-importmelding (en, als dit niet de eerste scan voor deze combinatie is, een mutatietabel).
-9. Klik "Bekijk actuele analyse" en controleer dat `/business/analyse` opent met dezelfde regio/categorie-selectie en de nieuwe cijfers (KPI's, makelaarstabel, objectentabel, en — als er een vorige vergelijkbare scan was — een bijgewerkte mutatiesectie).
-10. Optioneel: probeer tijdens deze scan een woningen-scan te starten (of omgekeerd) om te zien dat dit netjes wordt geblokkeerd met een duidelijke melding.
+## Sortering (sectie 9)
+`parseGetal()` in `app.js` is generiek herschreven: duizendtal-punten worden verwijderd, een komma wordt als decimaalteken herkend, niet-cijfertekens (bv. "m²", "dagen") worden genegeerd, negatieve waarden blijven werken. Dit is dezelfde, gedeelde functie voor Woningen én Business (via `initSorteerbareTabel()`/`sorteerTabel()`, beide ongewijzigd) — dus de eerder bekende Business-beperking is nu ook voor Business zelf verholpen, niet alleen "niet overgenomen" voor Woningen. `parseBedrag()` (voor €-kolommen) was al correct (strip alle niet-cijfers) en is niet aangepast.
 
-## Nog NIET gedaan (bewust, buiten scope van deze fase)
-Detailpagina-verrijking, nieuwe dashboards/grafieken, Google Sheets-export, automatische planning, cloudhosting, database-schemawijzigingen.
+## Actiebalk / export (sectie 10/11)
+Actiebalk op de woninganalyse: Terug naar filters (met behoud van filters via queryparameters) / Nieuwe scan uitvoeren (mini-formulier, post naar bestaande `/scan/start`) / Dashboard / Export CSV. Geen Google Sheets-knop. De disabled "Toevoegen aan Dashboard"-knop is verwijderd (was alleen verwarrend, geen functie). CSV-export (`/export/csv`) gebruikt dezelfde `bouw_analyseresultaat()`-pipeline en dus gegarandeerd dezelfde filters en dezelfde (nu bredere) standaardkolommen als de analysepagina zelf — getest: exact evenveel rijen in de CSV als op de pagina voor identieke filters.
 
-## Git status
-```
-On branch main
-Your branch is up to date with 'origin/main'.
-Changes not staged for commit:
-	modified:   .gitignore
-	modified:   README.md
-Untracked files:
-	CLAUDE.md
-	app.py
-	docs/
-	historie/
-	research/
-	scanner/
-	web/
-```
-Geen commit of push uitgevoerd.
+## Analyse uit SQLite (sectie 12)
+Geen wijziging aan het bestaande principe: alles wordt bij elke request opnieuw met `SELECT`-queries uit `data/makelaarsmonitor_historie.sqlite` opgebouwd (read-only connectie, `mode=ro`). Geen nieuwe databronnen, geen client-side cache, geen losse tijdelijke CSV gebruikt. Bewust géén generieke woningen/Business-superhelper gebouwd (zou een grotere refactor betekenen voor beperkte winst) — de nieuwe woningen-functies zijn naar hetzelfde patroon geschreven als hun Business-tegenhangers, maar blijven bewust apart (stabiliteit boven architecturale elegantie, zoals gevraagd).
+
+## Testresultaten
+Alle tests via `flask.test_client()` + directe functieaanroepen tegen de **echte, ongewijzigde** database (geen nieuwe live scan), plus gerichte unit-tests met synthetische mutatiedata (omdat de meest recente echte scan toevallig een nulmeting is voor haar exacte regiocombinatie — zie hieronder). In totaal 45+ checks, 0 gefaald na correctie van twee te brede testscript-aannames (bevestigd als testartefacten, geen app-bugs):
+- Woning-regressie: `/`, `/dashboard`, `/scan/start`-validatie, `/scan/status`, `/analyse`, `/export/csv` — allemaal status 200, geen traceback.
+- Analysepagina: KPI's, makelaarstabel, objectentabel renderen; geen Google Sheets-/dode-Dashboard-knop meer; Export CSV-knop aanwezig.
+- Filters blijven behouden: back-link bevat exact `plaats`/`status`/`bouwcategorie` van de huidige weergave.
+- CSV-export: exact evenveel objecten als de analysepagina voor identieke filters; header bevat de gevraagde velden.
+- Bouwcategorie-filter: "Bestaande bouw"-selectie bevat aantoonbaar geen enkele rij met `bouwcategorie == "Nieuwbouw"`.
+- Objecttabel: Adres is een werkende link naar de echte Funda-URL.
+- Mutatielogica (synthetische data, 4 objecten: 1 nieuw, 1 uit aanbod, 1 prijswijziging, 1 statuswijziging): aantallen kloppen exact, detailregels tonen correct "€ 625.000 → € 599.000" en "Beschikbaar → Onder bod", "Uit aanbod"-object heeft geen (want onmogelijke) oud/nieuw-details en de mutatietekst bevat nergens "verkocht"/"verhuurd"/"afgerond". Ook het template zelf gerenderd met deze data: geen crash, toont de juiste teksten.
+- Business-baseline (regressie, ongewijzigd): Actief aanbod 35, Kantoor 18, Bedrijfsruimte 18, Dual-listed 3, Huuraanbod 28, Koopaanbod 10, koopvraagprijs € 19.227.000, exact 1 mutatie (Oostwijk 1), 34 ongewijzigd — allemaal nog exact zoals opgegeven.
+- Databasebestanden (hoofdbestand, exacte bytegrootte): identiek vóór en na alle tests — geen enkele schrijfactie.
+- `py -m py_compile app.py` geslaagd.
+
+## Actuele sanity-check cijfers (sectie 15, echte database, alle statussen + alle bouwcategorieën, laatste scan)
+- Regio's van de laatste scan: Boekel, Heesch, Odiliapeel, Schaijk, Uden, Veghel, Volkel, Zeeland — scanmoment 08-09-2026 08:59.
+- **Totaal objecten: 554** (Beschikbaar 409, Onder bod 14, Verkocht onder voorbehoud 131).
+- Totale bekende vraagwaarde: € 316.128.987.
+- Gemiddelde vraagprijs: € 570.630 — mediaan: € 495.000.
+- Gemiddelde prijs per m²: € 4.538 — mediaan: € 4.367.
+- Totaal bekende woonoppervlakte: 86.595 m² — 68 unieke makelaars.
+- Top 5 makelaars op objectaantal: Meerdere makelaars (129, 23,3%), Van der Krabben Makelaardij Uden (58, 10,5%), Bernheze Makelaars (38, 6,9%), Van de Ven Garantiemakelaars (32, 5,8%), Meierijstad Makelaardij (25, 4,5%).
+- Mutaties: **geen** — deze scan (8-regio-combinatie) is een nulmeting; er bestaat nog geen eerdere scan met exact diezelfde 8 regio's om mee te vergelijken. Dit is correct gedrag, geen fout (het mutatieblok verschijnt daarom terecht niet op de pagina voor deze selectie).
+
+## Bekende beperkingen
+- Het mutatieblok verschijnt alleen wanneer er een eerdere scan bestaat met EXACT dezelfde regiocombinatie als de huidige (meest recente) scan. De huidige laatste scan (8 regio's) heeft die nog niet — dit is inherent aan het bestaande "altijd de allerlaatste scan tonen"-principe van de woningenmodule (ongewijzigd) en geen gebrek in de nieuwe mutatielogica zelf (die is apart met synthetische data geverifieerd correct).
+- De objectentabel blijft de bestaande, door de gebruiker aanpasbare kolommenselectie gebruiken (nu met een bredere standaardset) in plaats van een vast Business-achtig kolomschema — een bewuste keuze om de bestaande flexibiliteit niet te verliezen, zoals gevraagd ("geen grote refactor").
+- Geen `data-table-compact`-layout op de hoofdobjectentabel zelf (wél op de nieuwe makelaars-/plaatsverdelingstabellen): door de variabele, door de gebruiker gekozen kolomaantal is een vaste `colgroup`-breedteverdeling niet praktisch zonder extra logica; de bestaande `overflow-x:auto`-fallback blijft hier het vangnet, net als vóór deze wijziging.
 
 ## Aanbevolen volgende stap
-De live eindtest hierboven laten uitvoeren door de gebruiker in de browser. Bij akkoord: overwegen of de Business-tab ook een dashboard-uitbreiding of Google Sheets-export nodig heeft, of dat de huidige functionaliteit voorlopig volstaat.
+Handmatig testen zoals gevraagd: filters instellen, "Analyse huidige database" bekijken (KPI's/makelaarstabel/objectentabel), eventueel een regiocombinatie kiezen die al wél een eerdere vergelijkbare scan heeft om het mutatieblok in het echt te zien, en de CSV-export controleren. Pas na akkoord: committen/pushen (nadrukkelijk niet in deze ronde gedaan).

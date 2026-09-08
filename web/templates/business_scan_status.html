@@ -3,7 +3,7 @@
 {% block title %}Business-scanstatus - Makelaar Monitor{% endblock %}
 
 {% block content %}
-<a class="back-link" href="{{ url_for('index') }}">&larr; Terug naar filters</a>
+<a class="back-link" href="{{ url_for('index', tab='bedrijfsmatig', business_plaats=scan.plaatsen|default([], true), business_categorie=scan.categorieen|default([], true)) }}">&larr; Terug naar filters</a>
 
 {% if geblokkeerd %}
 <h1>Kan geen nieuwe Business-scan starten</h1>
@@ -69,7 +69,8 @@
 
     <div class="analyse-knoppen">
         <a class="primary-button" href="{{ url_for('business_analyse', business_plaats=scan.plaatsen, business_categorie=scan.categorieen, business_status=scan.statussen, business_transactietype=scan.transactietype) }}">Bekijk actuele analyse</a>
-        <a class="secondary-button" href="{{ url_for('index') }}">Nieuwe scan starten</a>
+        <a class="secondary-button" href="{{ url_for('index', tab='bedrijfsmatig') }}">Nieuwe scan starten</a>
+        <a class="secondary-button" href="{{ url_for('dashboard') }}">Dashboard</a>
     </div>
 </div>
 
@@ -82,7 +83,7 @@
         <span><strong>Gestart om:</strong> {{ scan.gestart_om_weergave if scan.gestart_om_weergave else "-" }}</span>
     </div>
     <p>{{ scan.foutmelding }}</p>
-    <a class="secondary-button" href="{{ url_for('index') }}">Terug naar filters</a>
+    <a class="secondary-button" href="{{ url_for('index', tab='bedrijfsmatig', business_plaats=scan.plaatsen|default([], true), business_categorie=scan.categorieen|default([], true)) }}">Terug naar filters</a>
 </section>
 
 {% else %}

@@ -187,11 +187,31 @@ function parseBedrag(tekst) {
 }
 
 function parseGetal(tekst) {
+    // Robuust voor Nederlandse getalnotatie: "." is een duizendtal-scheiding,
+    // "," is het decimaalteken (bv. "1.234" -> 1234, "1.234,5" -> 1234.5).
+    // Niet-cijfer/punt/komma-tekens (zoals "m²", "dagen") worden genegeerd.
     if (tekst === "" || tekst === "-") {
         return null;
     }
-    const waarde = parseFloat(tekst.replace(",", "."));
-    return isNaN(waarde) ? null : waarde;
+    let schoon = tekst.trim();
+    const negatief = schoon.charAt(0) === "-";
+    if (negatief) {
+        schoon = schoon.slice(1);
+    }
+    schoon = schoon.replace(/[^\d.,]/g, "");
+    if (schoon === "") {
+        return null;
+    }
+    if (schoon.indexOf(",") !== -1) {
+        schoon = schoon.replace(/\./g, "").replace(",", ".");
+    } else {
+        schoon = schoon.replace(/\./g, "");
+    }
+    const waarde = parseFloat(schoon);
+    if (isNaN(waarde)) {
+        return null;
+    }
+    return negatief ? -waarde : waarde;
 }
 
 function sorteerTabel(tabel, kolomIndex, th) {

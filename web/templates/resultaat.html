@@ -3,7 +3,7 @@
 {% block title %}Resultaat - Makelaar Monitor{% endblock %}
 
 {% block content %}
-<a class="back-link" href="{{ url_for('index') }}">&larr; Terug naar filters</a>
+<a class="back-link" href="{{ url_for('index', tab='woningen', plaats=plaatsen, status=statussen, bouwcategorie=bouwcategorieen) }}">&larr; Terug naar filters</a>
 
 {% if foutmelding %}
 <section class="card melding melding-fout">
@@ -14,25 +14,6 @@
 {% else %}
 <h1>Resultaat</h1>
 
-<div class="kpi-grid">
-    <div class="kpi-card">
-        <span class="kpi-label">Aantal objecten</span>
-        <span class="kpi-value">{{ kpis.aantal_objecten }}</span>
-    </div>
-    <div class="kpi-card">
-        <span class="kpi-label">Totale vraagprijs</span>
-        <span class="kpi-value">{{ kpis.totale_vraagprijs }}</span>
-    </div>
-    <div class="kpi-card">
-        <span class="kpi-label">Gemiddelde vraagprijs</span>
-        <span class="kpi-value">{{ kpis.gemiddelde_vraagprijs }}</span>
-    </div>
-    <div class="kpi-card">
-        <span class="kpi-label">Aantal makelaars</span>
-        <span class="kpi-value">{{ kpis.aantal_makelaars }}</span>
-    </div>
-</div>
-
 <div class="analyse-context">
     <span><strong>Peildatum / scanmoment:</strong> {{ scaninfo.scanmoment_weergave if scaninfo else "-" }}</span>
     <span><strong>Regio's:</strong> {{ plaatsen | join(", ") if plaatsen else "Alle regio's" }}</span>
@@ -40,12 +21,209 @@
     <span><strong>Bouwcategorie:</strong> {{ bouwcategorieen | join(", ") }}</span>
 </div>
 
-<div class="export-bar">
+<div class="analyse-knoppen">
+    <a class="secondary-button" href="{{ url_for('index', tab='woningen', plaats=plaatsen, status=statussen, bouwcategorie=bouwcategorieen) }}">Terug naar filters</a>
+    <form method="post" action="{{ url_for('scan_start') }}" class="inline-form">
+        {% for p in plaatsen %}<input type="hidden" name="plaats" value="{{ p }}">{% endfor %}
+        <button type="submit" class="secondary-button">Nieuwe scan uitvoeren</button>
+    </form>
+    <a class="secondary-button" href="{{ url_for('dashboard') }}">Dashboard</a>
     <a class="secondary-button" href="{{ url_for('export_csv') }}?{{ querystring }}">Export CSV</a>
-    <button type="button" class="secondary-button" disabled title="Volgt in een volgende ontwikkelfase">Export Google Sheets</button>
-    <button type="button" class="secondary-button" disabled title="Volgt in een volgende ontwikkelfase">Toevoegen aan Dashboard</button>
 </div>
 
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <span class="kpi-label">Actief aanbod</span>
+        <span class="kpi-value">{{ kpis.aantal_objecten }}</span>
+        <span class="kpi-sublabel">objecten in huidige selectie</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Beschikbaar</span>
+        <span class="kpi-value">{{ kpis.beschikbaar }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Onder bod</span>
+        <span class="kpi-value">{{ kpis.onder_bod }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Verkocht onder voorbehoud</span>
+        <span class="kpi-value">{{ kpis.verkocht_ov }}</span>
+    </div>
+    <div class="kpi-card kerncijfer">
+        <span class="kpi-label">Totale bekende vraagwaarde</span>
+        <span class="kpi-value groot">{{ kpis.totale_vraagprijs }}</span>
+        <span class="kpi-sublabel">som van vraagprijs, huidige selectie</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Gemiddelde vraagprijs</span>
+        <span class="kpi-value">{{ kpis.gemiddelde_vraagprijs }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Mediaan vraagprijs</span>
+        <span class="kpi-value">{{ kpis.mediaan_vraagprijs }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Gemiddelde prijs per m²</span>
+        <span class="kpi-value">{{ kpis.gemiddelde_m2 }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Mediaan prijs per m²</span>
+        <span class="kpi-value">{{ kpis.mediaan_m2 }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Totaal bekende woonoppervlakte</span>
+        <span class="kpi-value">{{ kpis.totaal_woonoppervlakte }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Aantal makelaars</span>
+        <span class="kpi-value">{{ kpis.aantal_makelaars }}</span>
+    </div>
+</div>
+
+<h2 class="sectie-titel">Aanbod per makelaar</h2>
+{% if makelaarstabel %}
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <colgroup>
+            <col style="width: 20%">
+            <col style="width: 8%">
+            <col style="width: 9%">
+            <col style="width: 16%">
+            <col style="width: 15%">
+            <col style="width: 13%">
+            <col style="width: 10%">
+            <col style="width: 9%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th>Makelaar</th>
+                <th class="num">Objecten</th>
+                <th class="num">Marktaandeel</th>
+                <th class="num">Totale vraagwaarde</th>
+                <th class="num">Gem. vraagprijs</th>
+                <th class="num">Mediaan vraagprijs</th>
+                <th class="num">Gem. €/m²</th>
+                <th class="num">Woonoppervlak</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in makelaarstabel %}
+            <tr>
+                <td class="wrap-cell">{{ m.makelaar }}</td>
+                <td class="num">{{ m.aantal }}</td>
+                <td class="num">{{ m.aandeel_pct }}%</td>
+                <td class="num">{{ m.totale_vraagwaarde_weergave }}</td>
+                <td class="num">{{ m.gemiddelde_vraagprijs_weergave }}</td>
+                <td class="num">{{ m.mediaan_vraagprijs_weergave }}</td>
+                <td class="num">{{ m.gemiddelde_m2_weergave }}</td>
+                <td class="num">{{ m.oppervlakte_weergave }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="melding">Geen makelaarsgegevens voor deze filters.</p>
+{% endif %}
+
+{% if plaatsverdeling and plaatsverdeling | length > 1 %}
+<h2 class="sectie-titel">Verdeling per plaats</h2>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <colgroup>
+            <col style="width: 18%">
+            <col style="width: 10%">
+            <col style="width: 12%">
+            <col style="width: 10%">
+            <col style="width: 12%">
+            <col style="width: 20%">
+            <col style="width: 18%">
+        </colgroup>
+        <thead>
+            <tr>
+                <th>Plaats</th>
+                <th class="num">Aantal</th>
+                <th class="num">Beschikbaar</th>
+                <th class="num">Onder bod</th>
+                <th class="num">VOV</th>
+                <th class="num">Totale vraagwaarde</th>
+                <th class="num">Gem. €/m²</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in plaatsverdeling %}
+            <tr>
+                <td>{{ p.plaats }}</td>
+                <td class="num">{{ p.aantal }}</td>
+                <td class="num">{{ p.beschikbaar }}</td>
+                <td class="num">{{ p.onder_bod }}</td>
+                <td class="num">{{ p.verkocht_ov }}</td>
+                <td class="num">{{ p.totale_vraagwaarde_weergave }}</td>
+                <td class="num">{{ p.gemiddelde_m2_weergave }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if mutatie_aantallen %}
+<h2 class="sectie-titel">Mutaties sinds vorige scan</h2>
+<p class="subtabel-titel">Vorige vergelijkbare scan (zelfde regioselectie): {{ vorige_scanmoment_weergave }}. "Uit aanbod" betekent uitsluitend niet meer aangetroffen bij deze scan - nooit automatisch verkocht, verhuurd of afgerond.</p>
+<div class="kpi-grid kpi-grid-3">
+    {% for label in ["Nieuw aanbod", "Uit aanbod", "Vraagprijs gewijzigd", "Status gewijzigd", "Makelaar gewijzigd", "Oppervlakte gewijzigd", "Ongewijzigd"] %}
+    <div class="kpi-card">
+        <span class="kpi-label">{{ label }}</span>
+        <span class="kpi-value">{{ mutatie_aantallen.get(label, 0) }}</span>
+    </div>
+    {% endfor %}
+</div>
+
+{% if mutatie_rijen %}
+<div class="table-wrap">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Adres</th>
+                <th>Plaats</th>
+                <th>Mutatie</th>
+                <th>Wijziging</th>
+                <th>Makelaar</th>
+                <th>Funda</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in mutatie_rijen %}
+            <tr>
+                <td>{{ m.adres or "-" }}</td>
+                <td>{{ m.plaats or "-" }}</td>
+                <td>{{ m.mutatie }}</td>
+                <td>
+                    {% if m.details %}
+                    {% for detail in m.details %}{{ detail }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+                <td>{{ m.makelaar or "-" }}</td>
+                <td>
+                    {% if m.funda_url %}
+                    <a class="tabel-link" href="{{ m.funda_url }}" target="_blank" rel="noopener noreferrer">Open Funda</a>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="melding">Geen gewijzigde objecten sinds de vorige scan.</p>
+{% endif %}
+{% endif %}
+
+<h2 class="sectie-titel">Objecten</h2>
 {% if rijen %}
 <div class="table-wrap">
     <table id="resultaat-tabel" class="data-table">
@@ -66,6 +244,14 @@
                     <a class="tabel-link" href="{{ rij[k] }}" target="_blank" rel="noopener noreferrer">Open Funda</a>
                     {% else %}
                     -
+                    {% endif %}
+                </td>
+                {% elif k == "adres" %}
+                <td>
+                    {% if rij.funda_url %}
+                    <a class="tabel-link" href="{{ rij.funda_url }}" target="_blank" rel="noopener noreferrer">{{ rij[k] if rij[k] else "-" }}</a>
+                    {% else %}
+                    {{ rij[k] if rij[k] else "-" }}
                     {% endif %}
                 </td>
                 {% else %}

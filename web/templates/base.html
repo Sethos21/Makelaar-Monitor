@@ -11,8 +11,9 @@
         <div class="topbar-inner">
             <a class="brand" href="{{ url_for('index') }}">Makelaar Monitor</a>
             <nav class="topnav">
-                <a href="{{ url_for('index') }}">Woningen</a>
-                <a href="{{ url_for('dashboard') }}">Dashboard</a>
+                <a href="{{ url_for('index', tab='woningen') }}" class="{% if actieve_sectie == 'woningen' %}active{% endif %}">Woningen</a>
+                <a href="{{ url_for('index', tab='bedrijfsmatig') }}" class="{% if actieve_sectie == 'bedrijfsmatig' %}active{% endif %}">Bedrijfsmatig</a>
+                <a href="{{ url_for('dashboard') }}" class="{% if actieve_sectie == 'dashboard' %}active{% endif %}">Dashboard</a>
             </nav>
         </div>
     </header>

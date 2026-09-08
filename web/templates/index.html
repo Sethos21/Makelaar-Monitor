@@ -17,6 +17,13 @@
     </div>
 
     <div id="panel-woningen" class="panel {% if actieve_tab != 'woningen' %}hidden{% endif %}">
+        {% if laatste_scan_woningen %}
+        <section class="card">
+            <h2>Laatste scan</h2>
+            <p class="melding">{{ laatste_scan_woningen.plaatsen | join(", ") }} &middot; {{ laatste_scan_woningen.scanmoment_weergave }} &middot; {{ laatste_scan_woningen.aantal_objecten }} objecten</p>
+            <a class="secondary-button" href="{{ url_for('analyse', plaats=laatste_scan_woningen.plaatsen, status='Beschikbaar', bouwcategorie='Bestaande bouw', kolom=kolommen_standaard) }}">Bekijk analyse</a>
+        </section>
+        {% endif %}
         <section class="card">
             <h2>Regio</h2>
             <div class="checkbox-toolbar">
@@ -85,6 +92,13 @@
     </div>
 
     <div id="panel-bedrijfsmatig" class="panel {% if actieve_tab != 'bedrijfsmatig' %}hidden{% endif %}">
+        {% if laatste_scan_business %}
+        <section class="card">
+            <h2>Laatste scan</h2>
+            <p class="melding">{{ laatste_scan_business.plaatsen | join(", ") }} &middot; {{ laatste_scan_business.scanmoment_weergave }} &middot; {{ laatste_scan_business.aantal_objecten }} objecten</p>
+            <a class="secondary-button" href="{{ url_for('business_analyse', business_plaats=laatste_scan_business.plaatsen, business_categorie=laatste_scan_business.categorieen, business_status='Beschikbaar', business_transactietype='Alles') }}">Bekijk analyse</a>
+        </section>
+        {% endif %}
         <section class="card">
             <h2>Regio</h2>
             <div class="checkbox-toolbar">

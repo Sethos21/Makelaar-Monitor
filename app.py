@@ -106,10 +106,19 @@ KOLOMMEN = {
 KOLOMMEN_STANDAARD = [
     "adres",
     "plaats",
-    "vraagprijs",
-    "makelaar",
     "status",
+    "bouwcategorie",
+    "vraagprijs",
     "woonoppervlakte",
+    "perceeloppervlakte",
+    "slaapkamers",
+    "energielabel",
+    "prijs_per_m2",
+    "makelaar",
+    "eerste_waarneming",
+    "laatste_waarneming",
+    "dagen_in_monitor",
+    "funda_url",
 ]
 
 # --- Fase 3: Business (bedrijfsmatig vastgoed) ---
@@ -301,21 +310,235 @@ def verrijk_rij(rij: dict, geschiedenis: dict[str, dict]) -> dict:
 
     rij["vraagprijs"] = formatteer_bedrag(vraagprijs) if vraagprijs is not None else "-"
 
+    perceeloppervlakte = rij.get("perceeloppervlakte")
+    rij["woonoppervlakte"] = (
+        (f"{woonoppervlakte:,.0f}".replace(",", ".") + " m²") if woonoppervlakte is not None else "-"
+    )
+    rij["perceeloppervlakte"] = (
+        (f"{perceeloppervlakte:,.0f}".replace(",", ".") + " m²") if perceeloppervlakte is not None else "-"
+    )
+
     return rij
 
 
 def bereken_kpis(rijen: list[dict]) -> dict:
-    """Verwacht ruwe (nog niet opgemaakte) rijen, dus vóór verrijk_rij()."""
+    """Verwacht ruwe (nog niet opgemaakte) rijen, dus vóór verrijk_rij().
+    Status-subtellingen zijn binnen de HUIDIGE selectie: als de gebruiker al
+    op één status filtert, tellen de andere logischerwijs 0 - zelfde principe
+    als de Business-KPI's (geen apart 'ongefilterd totaal' erbij verzinnen)."""
     aantal = len(rijen)
     totaal = sum(r.get("vraagprijs") or 0 for r in rijen)
     gemiddeld = round(totaal / aantal) if aantal else 0
     makelaars = {r.get("makelaar") for r in rijen if r.get("makelaar")}
+
+    per_status = {"Beschikbaar": 0, "Onder bod": 0, "Verkocht onder voorbehoud": 0}
+    for r in rijen:
+        s = r.get("status")
+        if s in per_status:
+            per_status[s] += 1
+
+    prijzen = [r["vraagprijs"] for r in rijen if r.get("vraagprijs") is not None]
+    mediaan_vraagprijs = round(statistics.median(prijzen)) if prijzen else None
+
+    prijzen_m2 = [
+        r["vraagprijs"] / r["woonoppervlakte"]
+        for r in rijen
+        if r.get("vraagprijs") and r.get("woonoppervlakte") and r["vraagprijs"] > 0 and r["woonoppervlakte"] > 0
+    ]
+    gemiddelde_m2 = round(sum(prijzen_m2) / len(prijzen_m2)) if prijzen_m2 else None
+    mediaan_m2 = round(statistics.median(prijzen_m2)) if prijzen_m2 else None
+
+    oppervlaktes = [r["woonoppervlakte"] for r in rijen if r.get("woonoppervlakte") is not None]
+    totaal_oppervlakte = sum(oppervlaktes) if oppervlaktes else None
+
     return {
         "aantal_objecten": aantal,
         "totale_vraagprijs": formatteer_bedrag(totaal),
         "gemiddelde_vraagprijs": formatteer_bedrag(gemiddeld),
         "aantal_makelaars": len(makelaars),
+        "beschikbaar": per_status["Beschikbaar"],
+        "onder_bod": per_status["Onder bod"],
+        "verkocht_ov": per_status["Verkocht onder voorbehoud"],
+        "mediaan_vraagprijs": formatteer_bedrag(mediaan_vraagprijs) if mediaan_vraagprijs is not None else "-",
+        "gemiddelde_m2": (formatteer_bedrag(gemiddelde_m2) + " /m²") if gemiddelde_m2 is not None else "-",
+        "mediaan_m2": (formatteer_bedrag(mediaan_m2) + " /m²") if mediaan_m2 is not None else "-",
+        "totaal_woonoppervlakte": (f"{totaal_oppervlakte:,.0f}".replace(",", ".") + " m²") if totaal_oppervlakte else "-",
     }
+
+
+def bouw_makelaarstabel(rijen: list[dict]) -> list[dict]:
+    """Marktaandeel = aandeel binnen de HUIDIGE selectie (rijen is al
+    gefilterd op plaats/status/bouwcategorie vóórdat dit wordt aangeroepen -
+    dus bij een 'Bestaande bouw'-filter tellen nieuwbouwprojecten hier al
+    niet meer mee). Zelfde aanpak als bouw_business_makelaarstabel()."""
+    totaal = len(rijen)
+    per_makelaar: dict[str, dict] = {}
+    for r in rijen:
+        naam = (r.get("makelaar") or "").strip() or "Onbekend"
+        entry = per_makelaar.setdefault(naam, {
+            "makelaar": naam, "aantal": 0, "prijzen": [], "prijzen_m2": [], "oppervlakte": 0.0,
+        })
+        entry["aantal"] += 1
+        if r.get("vraagprijs") is not None:
+            entry["prijzen"].append(r["vraagprijs"])
+        if r.get("vraagprijs") and r.get("woonoppervlakte") and r["vraagprijs"] > 0 and r["woonoppervlakte"] > 0:
+            entry["prijzen_m2"].append(r["vraagprijs"] / r["woonoppervlakte"])
+        if r.get("woonoppervlakte") is not None:
+            entry["oppervlakte"] += r["woonoppervlakte"]
+
+    tabel = []
+    for entry in per_makelaar.values():
+        totale_vraagwaarde = sum(entry["prijzen"]) if entry["prijzen"] else None
+        gemiddelde_vraagprijs = round(sum(entry["prijzen"]) / len(entry["prijzen"])) if entry["prijzen"] else None
+        mediaan_vraagprijs = round(statistics.median(entry["prijzen"])) if entry["prijzen"] else None
+        gemiddelde_m2 = round(sum(entry["prijzen_m2"]) / len(entry["prijzen_m2"])) if entry["prijzen_m2"] else None
+        tabel.append({
+            "makelaar": entry["makelaar"],
+            "aantal": entry["aantal"],
+            "aandeel_pct": round(entry["aantal"] / totaal * 100, 1) if totaal else 0,
+            "totale_vraagwaarde_weergave": formatteer_bedrag(totale_vraagwaarde) if totale_vraagwaarde is not None else "-",
+            "gemiddelde_vraagprijs_weergave": formatteer_bedrag(gemiddelde_vraagprijs) if gemiddelde_vraagprijs is not None else "-",
+            "mediaan_vraagprijs_weergave": formatteer_bedrag(mediaan_vraagprijs) if mediaan_vraagprijs is not None else "-",
+            "gemiddelde_m2_weergave": (formatteer_bedrag(gemiddelde_m2) + " /m²") if gemiddelde_m2 is not None else "-",
+            "oppervlakte_weergave": (f"{entry['oppervlakte']:,.0f}".replace(",", ".") + " m²") if entry["oppervlakte"] else "-",
+        })
+
+    tabel.sort(key=lambda x: x["aantal"], reverse=True)
+    return tabel
+
+
+def bouw_plaatsverdeling(rijen: list[dict]) -> list[dict]:
+    """Compacte verdeling per plaats van de HUIDIGE selectie - alleen zinvol
+    om te tonen als er meerdere plaatsen in de selectie zitten (bepaalt de
+    template, niet deze functie)."""
+    per_plaats: dict[str, dict] = {}
+    for r in rijen:
+        plaats = (r.get("plaats") or "").strip() or "Onbekend"
+        entry = per_plaats.setdefault(plaats, {
+            "plaats": plaats, "aantal": 0, "beschikbaar": 0, "onder_bod": 0, "verkocht_ov": 0,
+            "prijzen": [], "prijzen_m2": [],
+        })
+        entry["aantal"] += 1
+        status = r.get("status")
+        if status == "Beschikbaar":
+            entry["beschikbaar"] += 1
+        elif status == "Onder bod":
+            entry["onder_bod"] += 1
+        elif status == "Verkocht onder voorbehoud":
+            entry["verkocht_ov"] += 1
+        if r.get("vraagprijs") is not None:
+            entry["prijzen"].append(r["vraagprijs"])
+        if r.get("vraagprijs") and r.get("woonoppervlakte") and r["vraagprijs"] > 0 and r["woonoppervlakte"] > 0:
+            entry["prijzen_m2"].append(r["vraagprijs"] / r["woonoppervlakte"])
+
+    tabel = []
+    for entry in per_plaats.values():
+        totale_vraagwaarde = sum(entry["prijzen"]) if entry["prijzen"] else None
+        gemiddelde_vraagprijs = round(sum(entry["prijzen"]) / len(entry["prijzen"])) if entry["prijzen"] else None
+        gemiddelde_m2 = round(sum(entry["prijzen_m2"]) / len(entry["prijzen_m2"])) if entry["prijzen_m2"] else None
+        tabel.append({
+            "plaats": entry["plaats"],
+            "aantal": entry["aantal"],
+            "beschikbaar": entry["beschikbaar"],
+            "onder_bod": entry["onder_bod"],
+            "verkocht_ov": entry["verkocht_ov"],
+            "totale_vraagwaarde_weergave": formatteer_bedrag(totale_vraagwaarde) if totale_vraagwaarde is not None else "-",
+            "gemiddelde_vraagprijs_weergave": formatteer_bedrag(gemiddelde_vraagprijs) if gemiddelde_vraagprijs is not None else "-",
+            "gemiddelde_m2_weergave": (formatteer_bedrag(gemiddelde_m2) + " /m²") if gemiddelde_m2 is not None else "-",
+        })
+
+    tabel.sort(key=lambda x: x["aantal"], reverse=True)
+    return tabel
+
+
+def haal_vorige_scan_id(con: sqlite3.Connection, gebied: str, huidige_scanmoment: str, huidige_scan_id: int):
+    """Meest recente eerdere scan met EXACT hetzelfde gebied als de huidige
+    scan (zelfde matching-principe als get_previous_scan_id() in de
+    historie-tool en als de Business-mutatielogica) - dus geen vergelijking
+    met een scan die een andere regioselectie had."""
+    row = con.execute(
+        "SELECT scan_id FROM scans WHERE gebied = ? AND scanmoment < ? AND scan_id <> ? "
+        "ORDER BY scanmoment DESC LIMIT 1",
+        (gebied, huidige_scanmoment, huidige_scan_id),
+    ).fetchone()
+    return row["scan_id"] if row else None
+
+
+def haal_scan_snapshot(con: sqlite3.Connection, scan_id: int) -> dict[str, dict]:
+    """Alle rijen van één scan (ONGEFILTERD), op funda_url - de unieke
+    sleutel binnen een scan. Gebruikt voor mutatiedetectie, niet voor de
+    weergave (die gebruikt de wél gefilterde haal_snapshotrijen())."""
+    rijen = con.execute("SELECT * FROM snapshots WHERE scan_id = ?", (scan_id,)).fetchall()
+    return {r["funda_url"]: dict(r) for r in rijen if r["funda_url"]}
+
+
+def woning_mutatie_naam(oud: dict | None, nieuw: dict | None) -> str:
+    if oud is None:
+        return "Nieuw aanbod"
+    if nieuw is None:
+        return "Uit aanbod"
+
+    wijzigingen = []
+    if oud.get("vraagprijs") != nieuw.get("vraagprijs"):
+        wijzigingen.append("Vraagprijs gewijzigd")
+    if (oud.get("status") or "") != (nieuw.get("status") or ""):
+        wijzigingen.append("Status gewijzigd")
+    if (oud.get("makelaar") or "") != (nieuw.get("makelaar") or ""):
+        wijzigingen.append("Makelaar gewijzigd")
+    if oud.get("woonoppervlakte") != nieuw.get("woonoppervlakte"):
+        wijzigingen.append("Oppervlakte gewijzigd")
+
+    return " + ".join(wijzigingen) if wijzigingen else "Ongewijzigd"
+
+
+def woning_mutatie_details(oud: dict, nieuw: dict) -> list[str]:
+    """Bouwt 'oud → nieuw'-regels, uitsluitend wanneer zowel de oude als de
+    nieuwe snapshot betrouwbaar aanwezig zijn (dus nooit voor 'Nieuw aanbod'/
+    'Uit aanbod')."""
+    details = []
+    if oud.get("vraagprijs") != nieuw.get("vraagprijs"):
+        oud_w = formatteer_bedrag(oud["vraagprijs"]) if oud.get("vraagprijs") is not None else "-"
+        nieuw_w = formatteer_bedrag(nieuw["vraagprijs"]) if nieuw.get("vraagprijs") is not None else "-"
+        details.append(f"Vraagprijs: {oud_w} → {nieuw_w}")
+    if (oud.get("status") or "") != (nieuw.get("status") or ""):
+        details.append(f"Status: {oud.get('status') or '-'} → {nieuw.get('status') or '-'}")
+    if (oud.get("makelaar") or "") != (nieuw.get("makelaar") or ""):
+        details.append(f"Makelaar: {oud.get('makelaar') or '-'} → {nieuw.get('makelaar') or '-'}")
+    if oud.get("woonoppervlakte") != nieuw.get("woonoppervlakte"):
+        oud_w = f"{oud['woonoppervlakte']:,.0f} m²".replace(",", ".") if oud.get("woonoppervlakte") is not None else "-"
+        nieuw_w = f"{nieuw['woonoppervlakte']:,.0f} m²".replace(",", ".") if nieuw.get("woonoppervlakte") is not None else "-"
+        details.append(f"Oppervlakte: {oud_w} → {nieuw_w}")
+    return details
+
+
+def woning_bouw_mutaties(vorige_snapshot: dict, huidige_snapshot: dict):
+    """Vergelijkt de VOLLEDIGE (ongefilterde) snapshots van twee scans - net
+    als bij Business. Mutaties zijn een objectieve scanvergelijking, geen
+    weergavefilter. 'Uit aanbod' betekent uitsluitend: niet meer aangetroffen
+    in de volgende scan; NOOIT automatisch 'verkocht'/'verhuurd'/'transactie
+    afgerond'."""
+    ids = sorted(set(vorige_snapshot) | set(huidige_snapshot))
+    aantallen: dict[str, int] = {}
+    gewijzigd = []
+
+    for url in ids:
+        oud = vorige_snapshot.get(url)
+        nieuw = huidige_snapshot.get(url)
+        naam = woning_mutatie_naam(oud, nieuw)
+        aantallen[naam] = aantallen.get(naam, 0) + 1
+        if naam != "Ongewijzigd":
+            bron = nieuw or oud
+            details = woning_mutatie_details(oud, nieuw) if (oud is not None and nieuw is not None) else []
+            gewijzigd.append({
+                "mutatie": naam,
+                "adres": bron.get("adres"),
+                "plaats": bron.get("plaats"),
+                "makelaar": bron.get("makelaar"),
+                "funda_url": url,
+                "details": details,
+            })
+
+    return aantallen, gewijzigd
 
 
 def bouw_analyseresultaat(args) -> dict:
@@ -331,6 +554,11 @@ def bouw_analyseresultaat(args) -> dict:
         "scaninfo": None,
         "rijen": [],
         "kpis": None,
+        "makelaarstabel": [],
+        "plaatsverdeling": [],
+        "mutatie_aantallen": {},
+        "mutatie_rijen": [],
+        "vorige_scanmoment_weergave": None,
         "foutmelding": None,
     }
 
@@ -353,10 +581,29 @@ def bouw_analyseresultaat(args) -> dict:
         ruwe_rijen = dedupliceer_op_funda_url(ruwe_rijen)
 
         basis["kpis"] = bereken_kpis(ruwe_rijen)
+        basis["makelaarstabel"] = bouw_makelaarstabel(ruwe_rijen)
+        basis["plaatsverdeling"] = bouw_plaatsverdeling(ruwe_rijen)
 
         if ruwe_rijen:
             geschiedenis = haal_geschiedenis(con, [r.get("funda_url") for r in ruwe_rijen])
             basis["rijen"] = [verrijk_rij(dict(r), geschiedenis) for r in ruwe_rijen]
+
+        # Mutaties: vergelijking op scanniveau (het EXACTE gebied van de
+        # huidige scan, niet de eventueel smallere plaatsen-filter van de
+        # gebruiker) t.o.v. de vorige exact vergelijkbare scan - zelfde
+        # principe als bij Business.
+        vorige_scan_id = haal_vorige_scan_id(con, scaninfo.get("gebied", ""), scaninfo.get("scanmoment", ""), scan_id)
+        if vorige_scan_id:
+            huidige_snapshot = haal_scan_snapshot(con, scan_id)
+            vorige_snapshot = haal_scan_snapshot(con, vorige_scan_id)
+            aantallen, mutatie_rijen = woning_bouw_mutaties(vorige_snapshot, huidige_snapshot)
+            basis["mutatie_aantallen"] = aantallen
+            basis["mutatie_rijen"] = mutatie_rijen
+            vorige_rij = con.execute(
+                "SELECT scanmoment FROM scans WHERE scan_id = ?", (vorige_scan_id,)
+            ).fetchone()
+            if vorige_rij:
+                basis["vorige_scanmoment_weergave"] = formatteer_scanmoment(vorige_rij["scanmoment"])
 
         return basis
     finally:
@@ -1205,28 +1452,117 @@ def _voer_business_scan_uit(
         SCAN_RUNNING_LOCK.release()
 
 
+def haal_laatste_scan_samenvatting() -> dict | None:
+    """Eenvoudige 'laatste scan'-snelkoppeling voor het hoofdscherm: de meest
+    recente woningen-scan, ongeacht regio (bouw_analyseresultaat() gebruikt
+    toch altijd de meest recente scan, dus dit is exact wat 'Bekijk analyse'
+    al zou laten zien). Geen nieuwe state-opslag - rechtstreeks uit
+    scans.gebied/aantal_objecten."""
+    if not DB_PATH.exists():
+        return None
+    try:
+        con = get_readonly_connection()
+        try:
+            row = con.execute(
+                "SELECT gebied, scanmoment, aantal_objecten FROM scans "
+                "ORDER BY scanmoment DESC, scan_id DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "plaatsen": [p.strip() for p in (row["gebied"] or "").split("|") if p.strip()],
+                "scanmoment_weergave": formatteer_scanmoment(row["scanmoment"]),
+                "aantal_objecten": row["aantal_objecten"],
+            }
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+
+
+def haal_laatste_business_scan_samenvatting() -> dict | None:
+    """Analoog aan haal_laatste_scan_samenvatting(), maar voor de losstaande
+    Business-database: simpelweg de meest recente scan ongeacht gebied/
+    categorieen-combinatie, uitsluitend als snelkoppeling op het hoofdscherm.
+    De analysepagina zelf blijft de exacte gebied+categorieen-matching
+    gebruiken (business_analyse), hier alleen ter informatie/doorlinken."""
+    if not BUSINESS_DB_PATH.exists():
+        return None
+    try:
+        con = get_business_readonly_connection()
+        try:
+            row = con.execute(
+                "SELECT gebied, categorieen, scanmoment, aantal_objecten FROM business_scans "
+                "ORDER BY scanmoment DESC, scan_id DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "plaatsen": [p.strip() for p in (row["gebied"] or "").split("|") if p.strip()],
+                "categorieen": [c.strip() for c in (row["categorieen"] or "").split("|") if c.strip()],
+                "scanmoment_weergave": formatteer_scanmoment(row["scanmoment"]),
+                "aantal_objecten": row["aantal_objecten"],
+            }
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+
+
 @app.route("/")
 def index():
     fout = request.args.get("fout")
+    tab_param = request.args.get("tab")
+    if tab_param in ("woningen", "bedrijfsmatig"):
+        actieve_tab = tab_param
+    elif (fout or "").startswith("business_"):
+        actieve_tab = "bedrijfsmatig"
+    else:
+        actieve_tab = "woningen"
+
+    # UX-harmonisatie: filterstate behouden via queryparameters. De
+    # bestaande "*_standaard"-context-variabelen bepalen al welke
+    # checkboxen aangevinkt zijn (zie index.html) - door hier de
+    # binnenkomende queryparameters te gebruiken (met de oorspronkelijke
+    # standaardwaarden als fallback) werkt "terug naar filters" met behoud
+    # van selectie zonder dat de template zelf hoeft te veranderen.
+    geselecteerde_plaatsen = request.args.getlist("plaats") or list(REGIO_STANDAARD)
+    geselecteerde_statussen = request.args.getlist("status") or list(STATUS_STANDAARD)
+    geselecteerde_bouwcategorie = request.args.getlist("bouwcategorie") or list(BOUWCATEGORIE_STANDAARD)
+    geselecteerde_kolommen = [k for k in request.args.getlist("kolom") if k in KOLOMMEN] or list(KOLOMMEN_STANDAARD)
+
+    geselecteerde_business_plaatsen = request.args.getlist("business_plaats") or list(BUSINESS_REGIO_STANDAARD)
+    geselecteerde_business_categorieen = (
+        [c for c in request.args.getlist("business_categorie") if c in BUSINESS_CATEGORIEEN]
+        or list(BUSINESS_CATEGORIE_STANDAARD)
+    )
+    geselecteerde_business_statussen = request.args.getlist("business_status") or list(BUSINESS_STATUS_STANDAARD)
+    geselecteerde_business_transactietype = request.args.get("business_transactietype") or BUSINESS_TRANSACTIETYPE_STANDAARD
+    if geselecteerde_business_transactietype not in BUSINESS_TRANSACTIETYPES:
+        geselecteerde_business_transactietype = BUSINESS_TRANSACTIETYPE_STANDAARD
+
     return render_template(
         "index.html",
         regios=REGIOS_STANDAARD,
-        regio_standaard=REGIO_STANDAARD,
+        regio_standaard=geselecteerde_plaatsen,
         statussen=STATUSSEN,
-        status_standaard=STATUS_STANDAARD,
+        status_standaard=geselecteerde_statussen,
         bouwcategorieen=BOUWCATEGORIEEN,
-        bouwcategorie_standaard=BOUWCATEGORIE_STANDAARD,
+        bouwcategorie_standaard=geselecteerde_bouwcategorie,
         kolommen={k: v[0] for k, v in KOLOMMEN.items()},
-        kolommen_standaard=KOLOMMEN_STANDAARD,
+        kolommen_standaard=geselecteerde_kolommen,
         fout=fout,
-        actieve_tab="bedrijfsmatig" if (fout or "").startswith("business_") else "woningen",
+        actieve_tab=actieve_tab,
+        actieve_sectie=actieve_tab,
         business_categorieen=BUSINESS_CATEGORIEEN,
-        business_categorie_standaard=BUSINESS_CATEGORIE_STANDAARD,
+        business_categorie_standaard=geselecteerde_business_categorieen,
         business_transactietypes=BUSINESS_TRANSACTIETYPES,
-        business_transactietype_standaard=BUSINESS_TRANSACTIETYPE_STANDAARD,
-        business_regio_standaard=BUSINESS_REGIO_STANDAARD,
+        business_transactietype_standaard=geselecteerde_business_transactietype,
+        business_regio_standaard=geselecteerde_business_plaatsen,
         business_statussen=haal_business_statussen(),
-        business_status_standaard=BUSINESS_STATUS_STANDAARD,
+        business_status_standaard=geselecteerde_business_statussen,
+        laatste_scan_woningen=haal_laatste_scan_samenvatting(),
+        laatste_scan_business=haal_laatste_business_scan_samenvatting(),
     )
 
 
@@ -1264,6 +1600,7 @@ def scan_status_pagina():
         scan=scan,
         kolommen_standaard=KOLOMMEN_STANDAARD,
         geblokkeerd=bool(request.args.get("geblokkeerd")),
+        actieve_sectie="woningen",
     )
 
 
@@ -1323,6 +1660,7 @@ def business_scan_status_pagina():
         "business_scan_status.html",
         scan=scan,
         geblokkeerd=bool(request.args.get("geblokkeerd")),
+        actieve_sectie="bedrijfsmatig",
     )
 
 
@@ -1342,7 +1680,13 @@ def analyse():
         plaatsen=resultaat["plaatsen"],
         statussen=resultaat["statussen"],
         bouwcategorieen=resultaat["bouwcategorieen"],
+        makelaarstabel=resultaat["makelaarstabel"],
+        plaatsverdeling=resultaat["plaatsverdeling"],
+        mutatie_aantallen=resultaat["mutatie_aantallen"],
+        mutatie_rijen=resultaat["mutatie_rijen"],
+        vorige_scanmoment_weergave=resultaat["vorige_scanmoment_weergave"],
         querystring=request.query_string.decode(),
+        actieve_sectie="woningen",
     )
 
 
@@ -1386,12 +1730,13 @@ def business_analyse():
         mutatie_aantallen=resultaat["mutatie_aantallen"],
         mutatie_rijen=resultaat["mutatie_rijen"],
         vorige_scanmoment_weergave=resultaat["vorige_scanmoment_weergave"],
+        actieve_sectie="bedrijfsmatig",
     )
 
 
 @app.route("/dashboard")
 def dashboard():
-    return render_template("dashboard.html")
+    return render_template("dashboard.html", actieve_sectie="dashboard")
 
 
 if __name__ == "__main__":
