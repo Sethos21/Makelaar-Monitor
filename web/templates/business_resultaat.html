@@ -32,6 +32,7 @@
     <a class="secondary-button" href="{{ url_for('dashboard') }}">Dashboard</a>
 </div>
 
+<h2 class="sectie-titel">1. Kerncijfers</h2>
 <div class="kpi-grid">
     <div class="kpi-card">
         <span class="kpi-label">Actief aanbod</span>
@@ -56,6 +57,13 @@
         <span class="kpi-value">{{ kpis.totaal_m2_weergave }}</span>
     </div>
     <div class="kpi-card">
+        <span class="kpi-label">Aantal bekende makelaars</span>
+        <span class="kpi-value">{{ kpis.aantal_makelaars }}</span>
+        {% if kpis.aantal_zonder_makelaar %}
+        <span class="kpi-sublabel">waarvan {{ kpis.aantal_zonder_makelaar }} object(en) zonder herkende makelaar ("Onbekend") - telt wel mee in de markt</span>
+        {% endif %}
+    </div>
+    <div class="kpi-card">
         <span class="kpi-label">Koopaanbod</span>
         <span class="kpi-value">{{ kpis.koopaanbod }}</span>
         <span class="kpi-sublabel">{{ kpis.koopaanbod_met_prijs }} met prijs · {{ kpis.koopaanbod_notk }} n.o.t.k.</span>
@@ -68,7 +76,22 @@
 </div>
 <p class="subtabel-titel">Kantoor- en Bedrijfsruimte-aantallen kunnen samen meer zijn dan "Actief aanbod": een dual-categorie object telt in beide mee. Koop-/Huuraanbod tellen alle objecten die daadwerkelijk zo worden aangeboden (inclusief n.o.t.k./op aanvraag); een dual-listed object telt bij beide mee.</p>
 
-<h2 class="sectie-titel">Huur-kengetallen</h2>
+<div class="kpi-grid kpi-grid-3">
+    <div class="kpi-card kerncijfer">
+        <span class="kpi-label">Totale bekende vraagprijs koopaanbod</span>
+        <span class="kpi-value groot">{{ ("€ " ~ "{:,.0f}".format(koop_kpis.totaal).replace(",", ".")) if koop_kpis.totaal is not none else "-" }}</span>
+        <span class="kpi-sublabel">gebaseerd op {{ koop_kpis.aantal }} object(en) met bekende numerieke koopprijs · geen extrapolatie voor n.o.t.k./op aanvraag</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Gemiddelde koopprijs</span>
+        <span class="kpi-value">{{ ("€ " ~ "{:,.0f}".format(koop_kpis.gemiddelde).replace(",", ".")) if koop_kpis.gemiddelde is not none else "-" }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Mediaan koopprijs</span>
+        <span class="kpi-value">{{ ("€ " ~ "{:,.0f}".format(koop_kpis.mediaan).replace(",", ".")) if koop_kpis.mediaan is not none else "-" }}</span>
+    </div>
+</div>
+
 <div class="kpi-grid kpi-grid-3">
     <div class="kpi-card">
         <span class="kpi-label">Gemiddelde huur €/m²/jaar</span>
@@ -86,26 +109,177 @@
     </div>
 </div>
 
-<h2 class="sectie-titel">Koop-kengetallen</h2>
+<h2 class="sectie-titel">2. Makelaarspositie</h2>
+{% if makelaarstabel %}
+<p class="subtabel-titel">Marktaandeel objecten = aandeel van "Actief aanbod" hierboven ({{ kpis.actief_aanbod }} objecten, inclusief eventuele "Onbekend"-objecten in de noemer). Marktaandeel m²/koopwaarde/jaarhuur = aandeel van uitsluitend de bekende/betrouwbare waarden binnen de huidige selectie (dekking staat erbij vermeld) - geen schijnprecisie bij een lage dekking. Sortering: meeste objecten (= grootste marktaandeel) bovenaan.</p>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Makelaar</th>
+                <th class="num">Objecten</th>
+                <th class="marktaandeel-kolom">Marktaandeel objecten</th>
+                <th class="num">Aangeboden m²</th>
+                <th class="num">Marktaandeel m²</th>
+                <th class="num">Huur</th>
+                <th class="num">Koop</th>
+                <th class="num">Koopvraagwaarde</th>
+                <th class="num">Aandeel koopvraagwaarde</th>
+                <th class="num">Berekende jaarhuur</th>
+                <th class="num">Aandeel jaarhuur</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in makelaarstabel %}
+            <tr class="{% if m.is_onbekend %}rij-onbekend{% endif %}{% if loop.index > 5 %} rij-extra hidden{% endif %}">
+                <td class="wrap-cell">
+                    {% if m.is_onbekend %}
+                    <span title="Geen herkende makelaar - geen echte marktpartij, telt wel mee in de totale markt">Onbekend</span>
+                    {% else %}
+                    <a class="tabel-link" href="{{ url_for('makelaar_profiel', module='bedrijfsmatig', naam=m.makelaar, business_plaats=plaatsen, business_categorie=categorieen, business_status=statussen, business_transactietype=transactietype) }}">{{ m.makelaar }}</a>
+                    {% endif %}
+                </td>
+                <td class="num">{{ m.aantal }}</td>
+                <td>
+                    <div class="marktaandeel-cel">
+                        <div class="aandeel-balk"><div class="aandeel-balk-vul" style="width: {{ m.aandeel_pct }}%"></div></div>
+                        <span class="aandeel-pct">{{ m.aandeel_pct }}%</span>
+                    </div>
+                </td>
+                <td class="num">{{ m.m2_weergave }}</td>
+                <td class="num">{{ (m.aandeel_m2_pct ~ "%") if m.aandeel_m2_pct is not none else "-" }}</td>
+                <td class="num">{{ m.huur }}</td>
+                <td class="num">{{ m.koop }}</td>
+                <td class="num">{{ m.koopwaarde_weergave }}{% if m.koopwaarde_dekking %} <span class="dekking">({{ m.koopwaarde_dekking }} obj.)</span>{% endif %}</td>
+                <td class="num">{{ (m.aandeel_koopwaarde_pct ~ "%") if m.aandeel_koopwaarde_pct is not none else "-" }}</td>
+                <td class="num">{{ m.jaarhuur_weergave }}{% if m.jaarhuur_dekking %} <span class="dekking">({{ m.jaarhuur_dekking }} obj.)</span>{% endif %}</td>
+                <td class="num">{{ (m.aandeel_jaarhuur_pct ~ "%") if m.aandeel_jaarhuur_pct is not none else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if makelaarstabel | length > 5 %}
+    <div class="tabel-meer-knop">
+        <button type="button" class="link-button" data-toon-meer-makelaars data-meer-label="Alle makelaars tonen ({{ makelaarstabel | length }})" data-minder-label="Minder tonen">Alle makelaars tonen ({{ makelaarstabel | length }})</button>
+    </div>
+    {% endif %}
+</div>
+{% else %}
+<p class="melding">Geen makelaarsgegevens voor deze filters.</p>
+{% endif %}
+
+{% if plaatsvergelijking and plaatsvergelijking | length > 1 %}
+<h2 class="sectie-titel">3. Markt-/plaatsverdeling</h2>
+<p class="subtabel-titel">Ondersteunend bij makelaarspositie: waar zit het aanbod waarop het marktaandeel hierboven is gebaseerd? Bedoeld om bv. Uden naast Veghel of Boekel te leggen, geen objectenlijst.</p>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Plaats</th>
+                <th class="num">Actief aanbod</th>
+                <th class="num">Aangeboden m²</th>
+                <th class="num">Huur</th>
+                <th class="num">Koop</th>
+                <th class="num">Gem. huur €/m²/jaar</th>
+                <th class="num">Mediaan huur €/m²/jaar</th>
+                <th class="num">Gem. koop €/m²</th>
+                <th class="num">Mediaan koop €/m²</th>
+                <th class="num">Makelaars</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in plaatsvergelijking %}
+            <tr>
+                <td>{{ p.plaats }}</td>
+                <td class="num">{{ p.aantal }}</td>
+                <td class="num">{{ p.m2_weergave }}</td>
+                <td class="num">{{ p.huur }}</td>
+                <td class="num">{{ p.koop }}</td>
+                <td class="num">{{ p.gemiddelde_huur_m2jaar }}</td>
+                <td class="num">{{ p.mediaan_huur_m2jaar }}</td>
+                <td class="num">{{ p.gemiddelde_koop_m2 }}</td>
+                <td class="num">{{ p.mediaan_koop_m2 }}</td>
+                <td class="num">{{ p.aantal_makelaars }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<h2 class="sectie-titel">4. Segmentanalyse Bedrijfsruimte</h2>
+{% if segmentanalyse_bedrijfsruimte and segmentanalyse_bedrijfsruimte | selectattr("aantal", "gt", 0) | list %}
+<p class="subtabel-titel">Uitsluitend objecten binnen categorie Bedrijfsruimte met een betrouwbaar bekende oppervlakte - elk object valt in precies één grootteklasse. Huurprijs/m² alleen bij een echte €/m²/jaar-brontarief (nooit maandhuur); koopprijs/m² alleen bij bekende koopprijs + oppervlakte.</p>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Segment</th>
+                <th class="num">Objecten</th>
+                <th class="num">Aangeboden m²</th>
+                <th class="num">Huurobjecten</th>
+                <th class="num">Gem. huur €/m²/jaar</th>
+                <th class="num">Mediaan huur €/m²/jaar</th>
+                <th class="num">Koopobjecten</th>
+                <th class="num">Gem. koop €/m²</th>
+                <th class="num">Mediaan koop €/m²</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in segmentanalyse_bedrijfsruimte %}
+            <tr>
+                <td>{{ s.segment }}</td>
+                <td class="num">{{ s.aantal }}</td>
+                <td class="num">{{ s.m2_weergave }}</td>
+                <td class="num">{{ s.huur_aantal }}</td>
+                <td class="num">{{ s.gemiddelde_huur_m2jaar }}</td>
+                <td class="num">{{ s.mediaan_huur_m2jaar }}</td>
+                <td class="num">{{ s.koop_aantal }}</td>
+                <td class="num">{{ s.gemiddelde_koop_m2 }}</td>
+                <td class="num">{{ s.mediaan_koop_m2 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="melding">Geen Bedrijfsruimte-objecten met bekende oppervlakte in deze selectie.</p>
+{% endif %}
+
+<h2 class="sectie-titel">5. Marktdynamiek</h2>
+{% if netto_verandering is not none %}
 <div class="kpi-grid kpi-grid-3">
-    <div class="kpi-card kerncijfer">
-        <span class="kpi-label">Totale bekende vraagprijs koopaanbod</span>
-        <span class="kpi-value groot">{{ ("€ " ~ "{:,.0f}".format(koop_kpis.totaal).replace(",", ".")) if koop_kpis.totaal is not none else "-" }}</span>
-        <span class="kpi-sublabel">gebaseerd op {{ koop_kpis.aantal }} object(en) met bekende numerieke koopprijs · geen extrapolatie voor n.o.t.k./op aanvraag</span>
+    <div class="kpi-card">
+        <span class="kpi-label">Vorige scan</span>
+        <span class="kpi-value">{{ vorige_aantal_objecten }}</span>
+        <span class="kpi-sublabel">{{ vorige_scanmoment_weergave }}</span>
     </div>
     <div class="kpi-card">
-        <span class="kpi-label">Gemiddelde koopprijs</span>
-        <span class="kpi-value">{{ ("€ " ~ "{:,.0f}".format(koop_kpis.gemiddelde).replace(",", ".")) if koop_kpis.gemiddelde is not none else "-" }}</span>
+        <span class="kpi-label">Huidige scan</span>
+        <span class="kpi-value">{{ scaninfo.aantal_objecten if scaninfo else "-" }}</span>
+        <span class="kpi-sublabel">{{ scaninfo.scanmoment_weergave if scaninfo else "-" }} · ongefilterd totaal</span>
     </div>
-    <div class="kpi-card">
-        <span class="kpi-label">Mediaan koopprijs</span>
-        <span class="kpi-value">{{ ("€ " ~ "{:,.0f}".format(koop_kpis.mediaan).replace(",", ".")) if koop_kpis.mediaan is not none else "-" }}</span>
+    <div class="kpi-card {% if netto_verandering > 0 %}kerncijfer{% endif %}">
+        <span class="kpi-label">Netto verandering</span>
+        <span class="kpi-value">{{ "+" if netto_verandering > 0 else "" }}{{ netto_verandering }}</span>
     </div>
 </div>
-
+{% endif %}
+{% if dagen_in_monitor_stats.aantal %}
+<div class="kpi-grid kpi-grid-3">
+    <div class="kpi-card">
+        <span class="kpi-label">Gemiddelde dagen in monitor</span>
+        <span class="kpi-value">{{ dagen_in_monitor_stats.gemiddelde }}</span>
+        <span class="kpi-sublabel">gebaseerd op {{ dagen_in_monitor_stats.aantal }} object(en) met bekende eerste waarneming</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Mediaan dagen in monitor</span>
+        <span class="kpi-value">{{ dagen_in_monitor_stats.mediaan }}</span>
+    </div>
+</div>
+{% endif %}
 {% if mutatie_aantallen %}
-<h2 class="sectie-titel">Mutaties sinds vorige scan</h2>
-<p class="subtabel-titel">Vorige vergelijkbare scan: {{ vorige_scanmoment_weergave }}. "Uit aanbod" betekent uitsluitend niet meer aangetroffen bij deze scan - nooit automatisch verkocht of verhuurd.</p>
+<p class="subtabel-titel">Vorige vergelijkbare scan: {{ vorige_scanmoment_weergave }}. "Uit aanbod" betekent uitsluitend niet meer aangetroffen bij deze scan - nooit automatisch verkocht of verhuurd (instroom = nieuw aanbod, uitstroom = uit aanbod).</p>
 <div class="kpi-grid kpi-grid-3">
     {% for label in ["Nieuw aanbod", "Uit aanbod", "Koopprijs gewijzigd", "Huurprijs gewijzigd", "Huurprijs-eenheid gewijzigd", "Status gewijzigd", "Makelaar gewijzigd", "Oppervlakte gewijzigd", "Ongewijzigd"] %}
     <div class="kpi-card">
@@ -155,127 +329,91 @@
 {% else %}
 <p class="melding">Geen gewijzigde objecten sinds de vorige scan.</p>
 {% endif %}
-{% endif %}
-
-<h2 class="sectie-titel">Aanbod per makelaar</h2>
-{% if makelaarstabel %}
-<div class="table-wrap">
-    <table class="data-table data-table-compact">
-        <colgroup>
-            <col style="width: 24%">
-            <col style="width: 9%">
-            <col style="width: 9%">
-            <col style="width: 11%">
-            <col style="width: 8%">
-            <col style="width: 8%">
-            <col style="width: 16%">
-            <col style="width: 15%">
-        </colgroup>
-        <thead>
-            <tr>
-                <th>Makelaar</th>
-                <th class="num">Objecten</th>
-                <th class="num">Aandeel</th>
-                <th class="num">Totaal m²</th>
-                <th class="num">Huur</th>
-                <th class="num">Koop</th>
-                <th class="num">Koopwaarde</th>
-                <th class="num">Berekende jaarhuur</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for m in makelaarstabel %}
-            <tr>
-                <td class="wrap-cell">{{ m.makelaar }}</td>
-                <td class="num">{{ m.aantal }}</td>
-                <td class="num">{{ m.aandeel_pct }}%</td>
-                <td class="num">{{ m.m2_weergave }}</td>
-                <td class="num">{{ m.huur }}</td>
-                <td class="num">{{ m.koop }}</td>
-                <td class="num">{{ m.koopwaarde_weergave }}</td>
-                <td class="num">{{ m.jaarhuur_weergave }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
 {% else %}
-<p class="melding">Geen makelaarsgegevens voor deze filters.</p>
+<p class="melding">Nog geen eerdere vergelijkbare scan beschikbaar voor deze regio/categorieën - marktdynamiek verschijnt vanaf de volgende scan.</p>
 {% endif %}
 
-<h2 class="sectie-titel">Objecten</h2>
-{% if rijen %}
-{% set meerdere_regios = plaatsen | length > 1 %}
-<div class="table-wrap">
-    <table id="resultaat-tabel" class="data-table data-table-compact">
-        <colgroup>
-            {% if meerdere_regios %}
-            <col style="width: 16%">
-            <col style="width: 8%">
-            <col style="width: 12%">
-            <col style="width: 6%">
-            <col style="width: 13%">
-            <col style="width: 13%">
-            <col style="width: 12%">
-            <col style="width: 13%">
-            <col style="width: 7%">
-            {% else %}
-            <col style="width: 18%">
-            <col style="width: 13%">
-            <col style="width: 7%">
-            <col style="width: 14%">
-            <col style="width: 14%">
-            <col style="width: 13%">
-            <col style="width: 14%">
-            <col style="width: 7%">
-            {% endif %}
-        </colgroup>
-        <thead>
-            <tr>
-                <th data-type="tekst">Adres</th>
-                {% if meerdere_regios %}
-                <th data-type="tekst">Plaats</th>
-                {% endif %}
-                <th data-type="tekst">Type</th>
-                <th data-type="getal">m²</th>
-                <th data-type="bedrag">Koopprijs</th>
-                <th data-type="bedrag">Huurprijs</th>
-                <th data-type="bedrag">Berekende jaarhuur</th>
-                <th data-type="tekst">Makelaar</th>
-                <th data-type="getal">Dagen in monitor</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for rij in rijen %}
-            <tr>
-                <td class="wrap-cell">
-                    {% if rij.funda_url %}
-                    <a class="tabel-link" href="{{ rij.funda_url }}" target="_blank" rel="noopener noreferrer">{{ rij.adres or "-" }}</a>
-                    {% else %}
-                    {{ rij.adres or "-" }}
-                    {% endif %}
-                </td>
-                {% if meerdere_regios %}
-                <td>{{ rij.plaats or "-" }}</td>
-                {% endif %}
-                <td class="wrap-cell">{{ rij.type_weergave }}</td>
-                <td class="num">{{ rij.oppervlakte_weergave }}</td>
-                <td class="num">{{ rij.koopprijs_gecombineerd }}</td>
-                <td class="num">{{ rij.huurprijs_weergave }}</td>
-                <td class="num">{{ rij.berekende_jaarhuur_weergave }}</td>
-                <td class="wrap-cell">{{ rij.makelaar or "-" }}</td>
-                <td class="num">
-                    {% if rij.waarneming_tooltip %}
-                    <span class="dagen-tooltip" title="{{ rij.waarneming_tooltip }}">{{ rij.dagen_in_monitor_weergave }}</span>
-                    {% else %}
-                    {{ rij.dagen_in_monitor_weergave }}
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+<h2 class="sectie-titel">6. Export</h2>
+<p class="subtabel-titel">De analysepagina toont een samenvatting. Volledige objectdata (alle velden, alle objecten in deze selectie) is beschikbaar als CSV-export.</p>
+<div class="analyse-knoppen">
+    <a class="secondary-button" href="{{ url_for('business_export_csv') }}?{{ querystring }}">Export CSV (volledige detaildata)</a>
 </div>
+
+{% if rijen %}
+<details class="detail-toggle">
+    <summary>Objecten in deze selectie tonen ({{ rijen | length }}) - drill-down, normaal niet nodig voor de analyse</summary>
+    {% set meerdere_regios = plaatsen | length > 1 %}
+    <div class="table-wrap">
+        <table id="resultaat-tabel" class="data-table data-table-compact">
+            <colgroup>
+                {% if meerdere_regios %}
+                <col style="width: 16%">
+                <col style="width: 8%">
+                <col style="width: 12%">
+                <col style="width: 6%">
+                <col style="width: 13%">
+                <col style="width: 13%">
+                <col style="width: 12%">
+                <col style="width: 13%">
+                <col style="width: 7%">
+                {% else %}
+                <col style="width: 18%">
+                <col style="width: 13%">
+                <col style="width: 7%">
+                <col style="width: 14%">
+                <col style="width: 14%">
+                <col style="width: 13%">
+                <col style="width: 14%">
+                <col style="width: 7%">
+                {% endif %}
+            </colgroup>
+            <thead>
+                <tr>
+                    <th data-type="tekst">Adres</th>
+                    {% if meerdere_regios %}
+                    <th data-type="tekst">Plaats</th>
+                    {% endif %}
+                    <th data-type="tekst">Type</th>
+                    <th data-type="getal">m²</th>
+                    <th data-type="bedrag">Koopprijs</th>
+                    <th data-type="bedrag">Huurprijs</th>
+                    <th data-type="bedrag">Berekende jaarhuur</th>
+                    <th data-type="tekst">Makelaar</th>
+                    <th data-type="getal">Dagen in monitor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for rij in rijen %}
+                <tr>
+                    <td class="wrap-cell">
+                        {% if rij.funda_url %}
+                        <a class="tabel-link" href="{{ rij.funda_url }}" target="_blank" rel="noopener noreferrer">{{ rij.adres or "-" }}</a>
+                        {% else %}
+                        {{ rij.adres or "-" }}
+                        {% endif %}
+                    </td>
+                    {% if meerdere_regios %}
+                    <td>{{ rij.plaats or "-" }}</td>
+                    {% endif %}
+                    <td class="wrap-cell">{{ rij.type_weergave }}</td>
+                    <td class="num">{{ rij.oppervlakte_weergave }}</td>
+                    <td class="num">{{ rij.koopprijs_gecombineerd }}</td>
+                    <td class="num">{{ rij.huurprijs_weergave }}</td>
+                    <td class="num">{{ rij.berekende_jaarhuur_weergave }}</td>
+                    <td class="wrap-cell">{{ rij.makelaar or "-" }}</td>
+                    <td class="num">
+                        {% if rij.waarneming_tooltip %}
+                        <span class="dagen-tooltip" title="{{ rij.waarneming_tooltip }}">{{ rij.dagen_in_monitor_weergave }}</span>
+                        {% else %}
+                        {{ rij.dagen_in_monitor_weergave }}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</details>
 {% else %}
 <p class="melding">Geen passende data gevonden voor deze filters.</p>
 {% endif %}

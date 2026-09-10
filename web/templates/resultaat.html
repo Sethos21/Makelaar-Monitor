@@ -14,6 +14,41 @@
 {% else %}
 <h1>Resultaat</h1>
 
+{% if is_historisch %}
+<p class="melding melding-historisch">
+    Dit is een HISTORISCHE analyse (peilmoment {{ scaninfo.scanmoment_weergave if scaninfo else "-" }}) - de cijfers hieronder komen uitsluitend uit dit opgeslagen snapshot, niet uit actuele data.
+    {% if not is_nieuwe_methodiek %}
+    <br><strong>Let op:</strong> deze scan dateert van vóór de scanmethodiek-wijziging op {{ methodiek_wijziging_weergave }} en kan structureel onvolledig zijn t.o.v. latere scans - vergelijk dit aantal niet rechtstreeks met scans van erna.
+    {% endif %}
+</p>
+{% elif not is_nieuwe_methodiek %}
+<p class="melding melding-historisch">
+    <strong>Let op:</strong> deze (actuele) scan dateert van vóór de scanmethodiek-wijziging op {{ methodiek_wijziging_weergave }} en kan structureel onvolledig zijn - voor dit gebied is nog geen scan met de nieuwe, betrouwbare scanner uitgevoerd.
+</p>
+{% elif eerste_van_nieuwe_meetreeks %}
+<p class="melding melding-historisch">
+    Dit is de <strong>eerste scan van de nieuwe, betrouwbare meetreeks</strong> voor dit gebied (scanmethodiek gewijzigd op {{ methodiek_wijziging_weergave }} - zie docs/CLAUDE_STATUS.md). Er is bewust geen Marktdynamiek-vergelijking met de oudere, methodiek-incompatibele scan(s) hieronder - dat zou een fictieve aanbodsprong suggereren. Vanaf de volgende scan van dit gebied werkt Marktdynamiek weer normaal.
+</p>
+{% endif %}
+
+{% if scan_opties and scan_opties | length > 1 %}
+<form method="get" class="dashboard-filters">
+    {% for p in plaatsen %}<input type="hidden" name="plaats" value="{{ p }}">{% endfor %}
+    {% for s in statussen %}<input type="hidden" name="status" value="{{ s }}">{% endfor %}
+    {% for b in bouwcategorieen %}<input type="hidden" name="bouwcategorie" value="{{ b }}">{% endfor %}
+    <label>
+        Analyse van (peildatum / scanmoment)
+        <select name="scan_id" onchange="this.form.submit()">
+            {% for opt in scan_opties %}
+            <option value="{{ opt.scan_id }}" {% if scaninfo and opt.scan_id == scaninfo.scan_id %}selected{% endif %}>
+                {{ opt.scanmoment_weergave }}{% if opt.scan_id == laatste_scan_id %} (actueel){% endif %} - {{ opt.aantal_objecten }} objecten{% if not opt.is_nieuwe_methodiek %} (vóór methodiekwijziging){% endif %}
+            </option>
+            {% endfor %}
+        </select>
+    </label>
+</form>
+{% endif %}
+
 <div class="analyse-context">
     <span><strong>Peildatum / scanmoment:</strong> {{ scaninfo.scanmoment_weergave if scaninfo else "-" }}</span>
     <span><strong>Regio's:</strong> {{ plaatsen | join(", ") if plaatsen else "Alle regio's" }}</span>
@@ -28,9 +63,12 @@
         <button type="submit" class="secondary-button">Nieuwe scan uitvoeren</button>
     </form>
     <a class="secondary-button" href="{{ url_for('dashboard') }}">Dashboard</a>
-    <a class="secondary-button" href="{{ url_for('export_csv') }}?{{ querystring }}">Export CSV</a>
+    {% if is_historisch %}
+    <a class="secondary-button" href="{{ url_for('analyse', plaats=plaatsen, status=statussen, bouwcategorie=bouwcategorieen) }}">Terug naar actuele analyse</a>
+    {% endif %}
 </div>
 
+<h2 class="sectie-titel">1. Kerncijfers</h2>
 <div class="kpi-grid">
     <div class="kpi-card">
         <span class="kpi-label">Actief aanbod</span>
@@ -75,30 +113,27 @@
         <span class="kpi-value">{{ kpis.totaal_woonoppervlakte }}</span>
     </div>
     <div class="kpi-card">
-        <span class="kpi-label">Aantal makelaars</span>
+        <span class="kpi-label">Aantal bekende makelaars</span>
         <span class="kpi-value">{{ kpis.aantal_makelaars }}</span>
+        {% if kpis.aantal_zonder_makelaar %}
+        <span class="kpi-sublabel">waarvan {{ kpis.aantal_zonder_makelaar }} object(en) zonder herkende makelaar ("Onbekend") - telt wel mee in de markt</span>
+        {% endif %}
     </div>
 </div>
 
-<h2 class="sectie-titel">Aanbod per makelaar</h2>
+<h2 class="sectie-titel">2. Makelaarspositie</h2>
+<p class="subtabel-titel">
+    Marktaandeel = objecten van de makelaar / {{ kpis.aantal_objecten }} objecten in de huidige selectie (inclusief eventuele "Onbekend"-objecten in de noemer).
+    Sortering: meeste objecten (= grootste marktaandeel) bovenaan.
+</p>
 {% if makelaarstabel %}
 <div class="table-wrap">
     <table class="data-table data-table-compact">
-        <colgroup>
-            <col style="width: 20%">
-            <col style="width: 8%">
-            <col style="width: 9%">
-            <col style="width: 16%">
-            <col style="width: 15%">
-            <col style="width: 13%">
-            <col style="width: 10%">
-            <col style="width: 9%">
-        </colgroup>
         <thead>
             <tr>
                 <th>Makelaar</th>
                 <th class="num">Objecten</th>
-                <th class="num">Marktaandeel</th>
+                <th class="marktaandeel-kolom">Marktaandeel</th>
                 <th class="num">Totale vraagwaarde</th>
                 <th class="num">Gem. vraagprijs</th>
                 <th class="num">Mediaan vraagprijs</th>
@@ -108,10 +143,21 @@
         </thead>
         <tbody>
             {% for m in makelaarstabel %}
-            <tr>
-                <td class="wrap-cell">{{ m.makelaar }}</td>
+            <tr class="{% if m.is_onbekend %}rij-onbekend{% endif %}{% if loop.index > 5 %} rij-extra hidden{% endif %}">
+                <td class="wrap-cell">
+                    {% if m.is_onbekend %}
+                    <span title="Geen herkende makelaar - geen echte marktpartij, telt wel mee in de totale markt">Onbekend</span>
+                    {% else %}
+                    <a class="tabel-link" href="{{ url_for('makelaar_profiel', module='woningen', naam=m.makelaar, plaats=plaatsen, status=statussen, bouwcategorie=bouwcategorieen) }}">{{ m.makelaar }}</a>
+                    {% endif %}
+                </td>
                 <td class="num">{{ m.aantal }}</td>
-                <td class="num">{{ m.aandeel_pct }}%</td>
+                <td>
+                    <div class="marktaandeel-cel">
+                        <div class="aandeel-balk"><div class="aandeel-balk-vul" style="width: {{ m.aandeel_pct }}%"></div></div>
+                        <span class="aandeel-pct">{{ m.aandeel_pct }}%</span>
+                    </div>
+                </td>
                 <td class="num">{{ m.totale_vraagwaarde_weergave }}</td>
                 <td class="num">{{ m.gemiddelde_vraagprijs_weergave }}</td>
                 <td class="num">{{ m.mediaan_vraagprijs_weergave }}</td>
@@ -121,28 +167,69 @@
             {% endfor %}
         </tbody>
     </table>
+    {% if makelaarstabel | length > 5 %}
+    <div class="tabel-meer-knop">
+        <button type="button" class="link-button" data-toon-meer-makelaars data-meer-label="Alle makelaars tonen ({{ makelaarstabel | length }})" data-minder-label="Minder tonen">Alle makelaars tonen ({{ makelaarstabel | length }})</button>
+    </div>
+    {% endif %}
 </div>
 {% else %}
 <p class="melding">Geen makelaarsgegevens voor deze filters.</p>
 {% endif %}
 
 {% if plaatsverdeling and plaatsverdeling | length > 1 %}
-<h2 class="sectie-titel">Verdeling per plaats</h2>
+<h2 class="sectie-titel">3. Verdeling per plaats/gemeente</h2>
+<p class="subtabel-titel">Ondersteunend bij makelaarspositie: waar zit het aanbod waarop het marktaandeel hierboven is gebaseerd? Inwoners/aanbod-per-1.000 alleen getoond waar bron en peildatum bekend zijn (geen verzonnen waarde) - zie docs/CLAUDE_STATUS.md voor de gebruikte geografische bronnen.</p>
+<div class="dashboard-marktkeuze">
+    <a href="?{{ geo_qs_plaats }}" class="{% if geo_niveau == 'plaats' %}active{% endif %}">Per plaats</a>
+    <a href="?{{ geo_qs_gemeente }}" class="{% if geo_niveau == 'gemeente' %}active{% endif %}">Per gemeente</a>
+</div>
+
+{% if geo_niveau == "gemeente" %}
 <div class="table-wrap">
     <table class="data-table data-table-compact">
-        <colgroup>
-            <col style="width: 18%">
-            <col style="width: 10%">
-            <col style="width: 12%">
-            <col style="width: 10%">
-            <col style="width: 12%">
-            <col style="width: 20%">
-            <col style="width: 18%">
-        </colgroup>
+        <thead>
+            <tr>
+                <th>Gemeente</th>
+                <th>Provincie</th>
+                <th class="num">Inwoners</th>
+                <th class="num">Actief aanbod</th>
+                <th class="num">Aanbod per 1.000 inw.</th>
+                <th class="num">Beschikbaar</th>
+                <th class="num">Onder bod</th>
+                <th class="num">VOV</th>
+                <th class="num">Totale vraagwaarde</th>
+                <th class="num">Gem. €/m²</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for g in gemeenteverdeling %}
+            <tr>
+                <td>{{ g.gemeente }}</td>
+                <td>{{ g.provincie }}</td>
+                <td class="num">{{ g.inwoners_weergave }}</td>
+                <td class="num">{{ g.aantal }}</td>
+                <td class="num">{{ g.aanbod_per_1000_weergave }}</td>
+                <td class="num">{{ g.beschikbaar }}</td>
+                <td class="num">{{ g.onder_bod }}</td>
+                <td class="num">{{ g.verkocht_ov }}</td>
+                <td class="num">{{ g.totale_vraagwaarde_weergave }}</td>
+                <td class="num">{{ g.gemiddelde_m2_weergave }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
         <thead>
             <tr>
                 <th>Plaats</th>
+                <th>Gemeente</th>
+                <th class="num">Inwoners</th>
                 <th class="num">Aantal</th>
+                <th class="num">Aanbod per 1.000 inw.</th>
                 <th class="num">Beschikbaar</th>
                 <th class="num">Onder bod</th>
                 <th class="num">VOV</th>
@@ -154,7 +241,10 @@
             {% for p in plaatsverdeling %}
             <tr>
                 <td>{{ p.plaats }}</td>
+                <td>{{ p.gemeente }}</td>
+                <td class="num">{{ p.inwoners_weergave }}</td>
                 <td class="num">{{ p.aantal }}</td>
+                <td class="num">{{ p.aanbod_per_1000_weergave }}</td>
                 <td class="num">{{ p.beschikbaar }}</td>
                 <td class="num">{{ p.onder_bod }}</td>
                 <td class="num">{{ p.verkocht_ov }}</td>
@@ -167,9 +257,122 @@
 </div>
 {% endif %}
 
+<p class="subtabel-titel" style="margin-top: 1.25rem;">
+    <strong>Marktintensiteit</strong> - hoe verhoudt het aanbod zich tot het inwonertal? "Verwacht aanbod" = totaal aanbod × (inwoners gebied / totaal bekende inwoners in selectie). Index 100 = evenredig aan het inwonertal, &gt;100 = relatief veel aanbod t.o.v. inwoners, &lt;100 = relatief weinig - dit is een neutraal rekenkundig kengetal, GEEN uitspraak over woningtekort, verkoopsnelheid of marktgezondheid. Alleen berekend waar het inwonertal bekend is.
+</p>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>{{ "Gemeente" if geo_niveau == "gemeente" else "Plaats" }}</th>
+                <th class="num">Inwoners</th>
+                <th class="num">Aanbod</th>
+                <th class="num">Aandeel aanbod</th>
+                <th class="num">Aandeel inwoners</th>
+                <th class="num">Verschil</th>
+                <th class="num">Verwacht aanbod</th>
+                <th class="num">Marktintensiteitsindex</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for g in (gemeenteverdeling if geo_niveau == "gemeente" else plaatsverdeling) %}
+            <tr>
+                <td>{{ g.gemeente if geo_niveau == "gemeente" else g.plaats }}</td>
+                <td class="num">{{ g.inwoners_selectie_weergave }}</td>
+                <td class="num">{{ g.aantal }}</td>
+                <td class="num">{{ (g.aandeel_aanbod_pct ~ "%") if g.aandeel_aanbod_pct is not none else "-" }}</td>
+                <td class="num">{{ (g.aandeel_inwoners_pct ~ "%") if g.aandeel_inwoners_pct is not none else "-" }}</td>
+                <td class="num">{% if g.verschil_pp is not none %}{{ "+" if g.verschil_pp > 0 else "" }}{{ g.verschil_pp }} pp{% else %}-{% endif %}</td>
+                <td class="num">{{ g.verwacht_aanbod_weergave }}</td>
+                <td class="num">
+                    {% if g.marktintensiteitsindex is not none %}
+                    <span class="{% if g.marktintensiteitsindex > 100 %}trend-omhoog{% elif g.marktintensiteitsindex < 100 %}trend-omlaag{% endif %}">{{ g.marktintensiteitsindex }}</span>
+                    {% else %}-{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<h2 class="sectie-titel">4. Prijssegmenten</h2>
+{% if segmentanalyse and segmentanalyse | selectattr("aantal", "gt", 0) | list %}
+<p class="subtabel-titel">Uitsluitend objecten met een betrouwbaar bekende, positieve vraagprijs - elk object valt in precies één prijsklasse.</p>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Segment</th>
+                <th class="num">Aantal</th>
+                <th class="num">Aandeel</th>
+                <th class="num">Gem. vraagprijs</th>
+                <th class="num">Mediaan vraagprijs</th>
+                <th class="num">Gem. €/m²</th>
+                <th class="num">Mediaan €/m²</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in segmentanalyse %}
+            <tr>
+                <td>{{ s.segment }}</td>
+                <td class="num">{{ s.aantal }}</td>
+                <td class="num">{{ s.aandeel_pct }}%</td>
+                <td class="num">{{ s.gemiddelde_vraagprijs }}</td>
+                <td class="num">{{ s.mediaan_vraagprijs }}</td>
+                <td class="num">{{ s.gemiddelde_m2 }}</td>
+                <td class="num">{{ s.mediaan_m2 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="melding">Geen objecten met bekende vraagprijs in deze selectie.</p>
+{% endif %}
+
+<h2 class="sectie-titel">5. Marktdynamiek</h2>
+{% if netto_verandering is not none %}
+<p class="subtabel-titel">Onderstaande cijfers volgen dezelfde actieve filters als deze Analyse (regio/status/bouwcategorie) - dit is dus NIET automatisch de volledige scan.</p>
+<div class="kpi-grid kpi-grid-3">
+    <div class="kpi-card">
+        <span class="kpi-label">Vorige scan (huidige selectie)</span>
+        <span class="kpi-value">{{ vorige_aantal_objecten }}</span>
+        <span class="kpi-sublabel">{{ vorige_scanmoment_weergave }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Huidige scan (huidige selectie)</span>
+        <span class="kpi-value">{{ kpis.aantal_objecten }}</span>
+        <span class="kpi-sublabel">{{ scaninfo.scanmoment_weergave if scaninfo else "-" }}</span>
+    </div>
+    <div class="kpi-card {% if netto_verandering > 0 %}kerncijfer{% endif %}">
+        <span class="kpi-label">Netto verandering (huidige selectie)</span>
+        <span class="kpi-value">{{ "+" if netto_verandering > 0 else "" }}{{ netto_verandering }}</span>
+    </div>
+</div>
+{% if netto_verandering_totaal is not none %}
+<p class="subtabel-titel">Volledige scan (ongefilterd, ter referentie - NIET dezelfde populatie als hierboven): {{ vorige_aantal_objecten_totaal }} → {{ huidige_aantal_objecten_totaal }} objecten (netto {{ "+" if netto_verandering_totaal > 0 else "" }}{{ netto_verandering_totaal }}).</p>
+{% endif %}
+{% elif eerste_van_nieuwe_meetreeks %}
+<p class="melding">Geen Marktdynamiek beschikbaar: dit is de eerste scan van de nieuwe, betrouwbare meetreeks (methodiek gewijzigd op {{ methodiek_wijziging_weergave }}) - een vergelijking met de oudere scan(s) van dit gebied wordt bewust niet getoond. Vanaf de volgende scan werkt dit weer normaal.</p>
+{% else %}
+<p class="melding">Nog geen eerdere vergelijkbare scan beschikbaar voor dit gebied - Marktdynamiek verschijnt vanaf de volgende scan.</p>
+{% endif %}
+{% if dagen_in_monitor_stats.aantal %}
+<div class="kpi-grid kpi-grid-3">
+    <div class="kpi-card">
+        <span class="kpi-label">Gemiddelde dagen in monitor</span>
+        <span class="kpi-value">{{ dagen_in_monitor_stats.gemiddelde }}</span>
+        <span class="kpi-sublabel">gebaseerd op {{ dagen_in_monitor_stats.aantal }} object(en) met bekende eerste waarneming</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Mediaan dagen in monitor</span>
+        <span class="kpi-value">{{ dagen_in_monitor_stats.mediaan }}</span>
+    </div>
+</div>
+{% endif %}
 {% if mutatie_aantallen %}
-<h2 class="sectie-titel">Mutaties sinds vorige scan</h2>
-<p class="subtabel-titel">Vorige vergelijkbare scan (zelfde regioselectie): {{ vorige_scanmoment_weergave }}. "Uit aanbod" betekent uitsluitend niet meer aangetroffen bij deze scan - nooit automatisch verkocht, verhuurd of afgerond.</p>
+<p class="subtabel-titel">Vorige vergelijkbare scan (zelfde regioselectie): {{ vorige_scanmoment_weergave }}. "Uit aanbod" betekent uitsluitend niet meer aangetroffen bij deze scan - nooit automatisch verkocht, verhuurd of afgerond (instroom = nieuw aanbod, uitstroom = uit aanbod).</p>
 <div class="kpi-grid kpi-grid-3">
     {% for label in ["Nieuw aanbod", "Uit aanbod", "Vraagprijs gewijzigd", "Status gewijzigd", "Makelaar gewijzigd", "Oppervlakte gewijzigd", "Ongewijzigd"] %}
     <div class="kpi-card">
@@ -221,48 +424,58 @@
 {% else %}
 <p class="melding">Geen gewijzigde objecten sinds de vorige scan.</p>
 {% endif %}
+{% else %}
+<p class="melding">Nog geen eerdere vergelijkbare scan beschikbaar voor deze regioselectie - marktdynamiek verschijnt vanaf de volgende scan.</p>
 {% endif %}
 
-<h2 class="sectie-titel">Objecten</h2>
-{% if rijen %}
-<div class="table-wrap">
-    <table id="resultaat-tabel" class="data-table">
-        <thead>
-            <tr>
-                {% for k in kolommen %}
-                <th data-type="{{ kolom_sorteertype[k] }}">{{ kolom_labels[k] }}</th>
-                {% endfor %}
-            </tr>
-        </thead>
-        <tbody>
-            {% for rij in rijen %}
-            <tr>
-                {% for k in kolommen %}
-                {% if k == "funda_url" %}
-                <td>
-                    {% if rij[k] %}
-                    <a class="tabel-link" href="{{ rij[k] }}" target="_blank" rel="noopener noreferrer">Open Funda</a>
-                    {% else %}
-                    -
-                    {% endif %}
-                </td>
-                {% elif k == "adres" %}
-                <td>
-                    {% if rij.funda_url %}
-                    <a class="tabel-link" href="{{ rij.funda_url }}" target="_blank" rel="noopener noreferrer">{{ rij[k] if rij[k] else "-" }}</a>
-                    {% else %}
-                    {{ rij[k] if rij[k] else "-" }}
-                    {% endif %}
-                </td>
-                {% else %}
-                <td>{{ rij[k] if rij[k] is not none and rij[k] != "" else "-" }}</td>
-                {% endif %}
-                {% endfor %}
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+<h2 class="sectie-titel">6. Export</h2>
+<p class="subtabel-titel">De analysepagina toont een samenvatting. Volledige objectdata (alle velden, alle objecten in deze selectie) is beschikbaar als CSV-export.</p>
+<div class="analyse-knoppen">
+    <a class="secondary-button" href="{{ url_for('export_csv') }}?{{ querystring }}">Export CSV (volledige detaildata)</a>
 </div>
+
+{% if rijen %}
+<details class="detail-toggle">
+    <summary>Objecten in deze selectie tonen ({{ rijen | length }}) - drill-down, normaal niet nodig voor de analyse</summary>
+    <div class="table-wrap">
+        <table id="resultaat-tabel" class="data-table">
+            <thead>
+                <tr>
+                    {% for k in kolommen %}
+                    <th data-type="{{ kolom_sorteertype[k] }}">{{ kolom_labels[k] }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for rij in rijen %}
+                <tr>
+                    {% for k in kolommen %}
+                    {% if k == "funda_url" %}
+                    <td>
+                        {% if rij[k] %}
+                        <a class="tabel-link" href="{{ rij[k] }}" target="_blank" rel="noopener noreferrer">Open Funda</a>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    {% elif k == "adres" %}
+                    <td>
+                        {% if rij.funda_url %}
+                        <a class="tabel-link" href="{{ rij.funda_url }}" target="_blank" rel="noopener noreferrer">{{ rij[k] if rij[k] else "-" }}</a>
+                        {% else %}
+                        {{ rij[k] if rij[k] else "-" }}
+                        {% endif %}
+                    </td>
+                    {% else %}
+                    <td>{{ rij[k] if rij[k] is not none and rij[k] != "" else "-" }}</td>
+                    {% endif %}
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</details>
 {% else %}
 <p class="melding">Geen passende data gevonden voor deze filters.</p>
 {% endif %}

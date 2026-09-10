@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Er ging iets mis - Makelaar Monitor{% endblock %}
+
+{% block content %}
+<section class="card melding melding-fout">
+    <h1>Deze analyse kon niet worden opgebouwd</h1>
+    <p>Er is een onverwachte fout opgetreden. De fout is vastgelegd (zie de serverconsole/log).</p>
+    <div class="analyse-knoppen">
+        <a class="secondary-button" href="{{ url_for('analyse') }}">Terug naar Analyse</a>
+        <a class="secondary-button" href="{{ url_for('index') }}">Terug naar hoofdscherm</a>
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+
+{% block title %}{{ profiel.naam if profiel else "Makelaar" }} - Makelaar Monitor{% endblock %}
+
+{% block content %}
+{% if terug_url %}
+<a class="back-link" href="{{ terug_url }}">&larr; Terug naar analyse</a>
+{% endif %}
+
+{% if foutmelding %}
+<section class="card melding melding-fout">
+    <h1>Makelaarsprofiel</h1>
+    <p>{{ foutmelding }}</p>
+</section>
+{% else %}
+
+<div class="profiel-header">
+    <h1>{{ profiel.naam }}</h1>
+    <span class="melding">{{ "Woningen" if module == "woningen" else "Bedrijfsmatig" }}</span>
+</div>
+
+{% if funda_makelaar_link %}
+<div class="analyse-knoppen" style="margin-top: -0.5rem; margin-bottom: 1rem;">
+    <a class="secondary-button" href="{{ funda_makelaar_link.url }}" target="_blank" rel="noopener noreferrer">Bekijk aanbod op Funda ↗</a>
+</div>
+<p class="subtabel-titel" style="margin-top: -0.5rem;">
+    Dit opent de ACTUELE, externe Funda-makelaarspagina (kantoor-ID {{ funda_makelaar_link.kantoor_id }}) in een nieuw tabblad - dat kan afwijken van {% if is_historisch %}deze historische{% else %}deze{% endif %} analyse.
+</p>
+{% endif %}
+
+<p class="subtabel-titel">
+    Profiel op basis van de huidige filterselectie (regio/status/categorie zoals gekozen op de analysepagina van herkomst) -
+    geen externe KvK-, Google- of reviewdata. Marktaandeel = aandeel binnen deze {{ profiel.marktaandeel_noemer }} objecten.
+</p>
+
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <span class="kpi-label">Actief aanbod</span>
+        <span class="kpi-value">{{ profiel.aantal }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Marktaandeel</span>
+        <span class="kpi-value">{{ profiel.marktaandeel_pct }}%</span>
+        <span class="kpi-sublabel">van {{ profiel.marktaandeel_noemer }} objecten in huidige selectie</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Aangeboden m²</span>
+        <span class="kpi-value">{{ profiel.m2_weergave }}</span>
+    </div>
+
+    {% if module == "woningen" %}
+    <div class="kpi-card kerncijfer">
+        <span class="kpi-label">Totale vraagwaarde</span>
+        <span class="kpi-value groot">{{ profiel.totale_vraagwaarde_weergave }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Gemiddelde vraagprijs</span>
+        <span class="kpi-value">{{ profiel.gemiddelde_vraagprijs_weergave }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Mediaan vraagprijs</span>
+        <span class="kpi-value">{{ profiel.mediaan_vraagprijs_weergave }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Gemiddelde €/m²</span>
+        <span class="kpi-value">{{ profiel.gemiddelde_m2_weergave }}</span>
+    </div>
+    {% else %}
+    <div class="kpi-card">
+        <span class="kpi-label">Huurobjecten</span>
+        <span class="kpi-value">{{ profiel.huur }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Koopobjecten</span>
+        <span class="kpi-value">{{ profiel.koop }}</span>
+    </div>
+    <div class="kpi-card kerncijfer">
+        <span class="kpi-label">Koopvraagwaarde</span>
+        <span class="kpi-value groot">{{ profiel.koopwaarde_weergave }}</span>
+        <span class="kpi-sublabel">{{ profiel.koopwaarde_dekking }} object(en) met bekende koopprijs</span>
+    </div>
+    <div class="kpi-card berekend">
+        <span class="kpi-label">Berekende jaarhuur</span>
+        <span class="kpi-value">{{ profiel.jaarhuur_weergave }}</span>
+        <span class="kpi-sublabel">{{ profiel.jaarhuur_dekking }} object(en) met geldige berekening</span>
+    </div>
+    {% endif %}
+</div>
+
+<h2 class="sectie-titel">Actief in</h2>
+<p class="melding"><strong>Plaatsen:</strong></p>
+<div class="badge-lijst">
+    {% for p in profiel.plaatsen %}<span class="badge">{{ p }}</span>{% else %}<span class="melding">-</span>{% endfor %}
+</div>
+<p class="melding" style="margin-top: 0.75rem;"><strong>Segmenten:</strong></p>
+<div class="badge-lijst">
+    {% for s in profiel.segmenten %}<span class="badge">{{ s }}</span>{% else %}<span class="melding">Onvoldoende brondata voor segmentindeling.</span>{% endfor %}
+</div>
+
+{% if module == "woningen" %}
+<h2 class="sectie-titel">Marktpositie per plaats</h2>
+{% if profiel.marktpositie_plaats %}
+<p class="subtabel-titel">Positie binnen exact dezelfde scan/filterselectie als dit profiel - "Totaal markt" is het totale aanbod van ALLE makelaars in die plaats (dus niet hetzelfde als het marktaandeel-cijfer hierboven, dat over de hele selectie gaat). "Inwoners" en "Marktintensiteitsindex" zijn aanvullende context (evenredig aan inwonertal = 100) en tellen niet mee in de marktaandeelberekening.</p>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Plaats</th>
+                <th class="num">Objecten makelaar</th>
+                <th class="num">Totaal markt</th>
+                <th class="num">Marktaandeel</th>
+                <th class="num">Ranking</th>
+                <th class="num">Inwoners (context)</th>
+                <th class="num">Marktintensiteitsindex (context)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in profiel.marktpositie_plaats %}
+            <tr>
+                <td>{{ m.gebied }}</td>
+                <td class="num">{{ m.objecten_makelaar }}</td>
+                <td class="num">{{ m.totaal_markt }}</td>
+                <td class="num">{{ m.marktaandeel_pct }}%</td>
+                <td class="num">{{ m.ranking_weergave }}</td>
+                <td class="num">{{ m.inwoners_weergave }}</td>
+                <td class="num">
+                    {% if m.marktintensiteitsindex is not none %}
+                    <span class="{{ 'trend-omhoog' if m.marktintensiteitsindex > 100 else ('trend-omlaag' if m.marktintensiteitsindex < 100 else '') }}">{{ m.marktintensiteitsindex }}</span>
+                    {% else %}-{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="melding">Geen plaatsgegevens beschikbaar voor deze makelaar in de huidige selectie.</p>
+{% endif %}
+
+{% if profiel.marktpositie_gemeente %}
+<h2 class="sectie-titel">Marktpositie per gemeente</h2>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Gemeente</th>
+                <th class="num">Objecten makelaar</th>
+                <th class="num">Totaal markt</th>
+                <th class="num">Marktaandeel</th>
+                <th class="num">Ranking</th>
+                <th class="num">Inwoners (context)</th>
+                <th class="num">Marktintensiteitsindex (context)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in profiel.marktpositie_gemeente %}
+            <tr>
+                <td>{{ m.gebied }}</td>
+                <td class="num">{{ m.objecten_makelaar }}</td>
+                <td class="num">{{ m.totaal_markt }}</td>
+                <td class="num">{{ m.marktaandeel_pct }}%</td>
+                <td class="num">{{ m.ranking_weergave }}</td>
+                <td class="num">{{ m.inwoners_weergave }}</td>
+                <td class="num">
+                    {% if m.marktintensiteitsindex is not none %}
+                    <span class="{{ 'trend-omhoog' if m.marktintensiteitsindex > 100 else ('trend-omlaag' if m.marktintensiteitsindex < 100 else '') }}">{{ m.marktintensiteitsindex }}</span>
+                    {% else %}-{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endif %}
+
+<p class="subtabel-titel" style="margin-top: 1.5rem;">Ontwikkeling door de tijd is voor een individuele makelaar nog niet beschikbaar (zie docs/BUGLIST.md) - dat vereist het herleiden van dezelfde makelaar over meerdere vergelijkbare scans heen.</p>
+
+{% endif %}
+{% endblock %}

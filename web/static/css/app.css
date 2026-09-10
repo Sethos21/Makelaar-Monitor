@@ -470,6 +470,241 @@ h2 {
     border-bottom: 1px dotted var(--kleur-tekst-zacht);
 }
 
+.dekking {
+    color: var(--kleur-tekst-zacht);
+    font-size: 0.78em;
+    font-weight: 400;
+}
+
+/* --- Marktaandeel-indicator in de makelaarstabel: compacte horizontale
+   balk + exact percentage ernaast, puur CSS (geen JS/chart-library). --- */
+.marktaandeel-kolom {
+    min-width: 140px;
+}
+
+.marktaandeel-cel {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.aandeel-balk {
+    flex: 1;
+    height: 8px;
+    background: #e7ecf3;
+    border-radius: 999px;
+    overflow: hidden;
+    min-width: 60px;
+}
+
+.aandeel-balk-vul {
+    height: 100%;
+    background: var(--kleur-accent);
+    border-radius: 999px;
+}
+
+.aandeel-pct {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--kleur-primair-donker);
+    white-space: nowrap;
+    min-width: 3.2em;
+    text-align: right;
+}
+
+/* --- "Onbekend"-rij in de makelaarstabel: duidelijk geen echte makelaar,
+   telt wel mee in de marktnoemer. --- */
+.rij-onbekend td {
+    color: var(--kleur-tekst-zacht);
+    font-style: italic;
+}
+
+.rij-onbekend .aandeel-balk-vul {
+    background: #9aa7b5;
+}
+
+/* --- Makelaarspositie Top 5 (stabilisatieronde 2026-09-09) --- */
+.tabel-meer-knop {
+    padding: 0.6rem 1rem;
+    border-top: 1px solid var(--kleur-rand);
+    text-align: center;
+}
+
+/* --- Historische analyse (DEEL C) --- */
+.melding-historisch {
+    background: #fff7e6;
+    border: 1px solid #f3d9a3;
+    color: #7a5200;
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+/* --- Marktaandeel-ontwikkeling (Dashboard, procentpunt) --- */
+.trend-omhoog {
+    color: var(--kleur-succes);
+    font-weight: 600;
+}
+
+.trend-omlaag {
+    color: var(--kleur-fout);
+    font-weight: 600;
+}
+
+/* --- Details/summary "volledige objectdata"-toggle (DEEL C): standaard
+   dichtgeklapt, zodat de primaire analysepagina compact blijft; de tabel
+   zelf blijft ongewijzigd beschikbaar voor wie toch wil drill-downen. --- */
+.detail-toggle {
+    margin-top: 0.75rem;
+}
+
+.detail-toggle summary {
+    cursor: pointer;
+    color: var(--kleur-accent);
+    font-weight: 600;
+    font-size: 0.9rem;
+    padding: 0.5rem 0;
+}
+
+.detail-toggle summary:hover {
+    text-decoration: underline;
+}
+
+.detail-toggle[open] summary {
+    margin-bottom: 0.5rem;
+}
+
+/* --- Grafieken (DEEL M): eenvoudige, server-gerenderde SVG - geen extra
+   framework nodig. --- */
+.grafiek-wrap {
+    background: var(--kleur-oppervlak);
+    border: 1px solid var(--kleur-rand);
+    border-radius: var(--radius);
+    box-shadow: var(--schaduw);
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+    overflow-x: auto;
+}
+
+.grafiek-wrap svg {
+    display: block;
+    max-width: 100%;
+}
+
+.grafiek-titel {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--kleur-primair-donker);
+    margin-bottom: 0.5rem;
+}
+
+.grafiek-legenda {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1rem;
+    font-size: 0.75rem;
+    color: var(--kleur-tekst-zacht);
+    margin-top: 0.5rem;
+}
+
+.grafiek-legenda-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.grafiek-legenda-kleur {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+}
+
+/* --- Dashboard marktkeuze --- */
+.dashboard-marktkeuze {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+}
+
+.dashboard-marktkeuze a {
+    border: 1px solid var(--kleur-rand);
+    background: var(--kleur-oppervlak);
+    color: var(--kleur-tekst-zacht);
+    padding: 0.6rem 1.2rem;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.dashboard-marktkeuze a.active {
+    background: var(--kleur-primair);
+    border-color: var(--kleur-primair);
+    color: #ffffff;
+}
+
+.dashboard-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-end;
+    margin-bottom: 1.25rem;
+    background: var(--kleur-oppervlak);
+    border: 1px solid var(--kleur-rand);
+    border-radius: var(--radius);
+    padding: 0.9rem 1.25rem;
+}
+
+.dashboard-filters label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+    color: var(--kleur-tekst-zacht);
+}
+
+.dashboard-filters select {
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--kleur-rand);
+    border-radius: var(--radius);
+    font-size: 0.88rem;
+}
+
+.dashboard-scanreeks-melding {
+    font-size: 0.8rem;
+    color: var(--kleur-tekst-zacht);
+    margin: -0.5rem 0 1rem;
+}
+
+/* --- Makelaarsprofiel --- */
+.profiel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.badge-lijst {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0.5rem 0 0;
+}
+
+.badge {
+    display: inline-block;
+    background: #eef3fb;
+    color: var(--kleur-primair-donker);
+    border: 1px solid #d3e0f4;
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.78rem;
+}
+
 /* --- Responsive --- */
 @media (max-width: 768px) {
     .checkbox-grid {

@@ -4,44 +4,222 @@
 
 {% block content %}
 <h1>Dashboard</h1>
-<p class="subtitle">Nog geen data gekoppeld &mdash; dit scherm toont alvast de toekomstige indeling.</p>
+<p class="subtitle">Analyse toont de huidige markt; het Dashboard toont ontwikkeling door de tijd en vergelijking tussen scans.</p>
 
-<div class="kpi-grid">
-    <div class="kpi-card">
-        <span class="kpi-label">Actief aanbod</span>
-        <span class="kpi-value">&ndash;</span>
-    </div>
-    <div class="kpi-card">
-        <span class="kpi-label">Totale aanbodwaarde</span>
-        <span class="kpi-value">&ndash;</span>
-    </div>
-    <div class="kpi-card">
-        <span class="kpi-label">Aantal makelaars</span>
-        <span class="kpi-value">&ndash;</span>
-    </div>
-    <div class="kpi-card">
-        <span class="kpi-label">Nieuwe objecten</span>
-        <span class="kpi-value">&ndash;</span>
-    </div>
+<div class="dashboard-marktkeuze">
+    <a href="{{ url_for('dashboard', markt='woningen') }}" class="{% if markt == 'woningen' %}active{% endif %}">Woningen</a>
+    <a href="{{ url_for('dashboard', markt='bedrijfsmatig') }}" class="{% if markt == 'bedrijfsmatig' %}active{% endif %}">Bedrijfsmatig</a>
 </div>
 
-<section class="card">
-    <h2>Marktaandeel makelaars</h2>
-    <p class="placeholder">Nog geen data beschikbaar.</p>
-</section>
+{% if not scanreeksen %}
+<p class="melding">Nog geen scans beschikbaar voor {{ "Woningen" if markt == "woningen" else "Bedrijfsmatig" }} - het Dashboard vult zich zodra er minimaal één scan is uitgevoerd.</p>
 
-<section class="card">
-    <h2>Aanbod per plaats</h2>
-    <p class="placeholder">Nog geen data beschikbaar.</p>
-</section>
+{% else %}
+<form method="get" class="dashboard-filters">
+    <input type="hidden" name="markt" value="{{ markt }}">
+    {% if markt == "woningen" %}
+    <label>
+        Scanregio (exacte selectie)
+        <select name="gebied" onchange="this.form.submit()">
+            {% for r in scanreeksen %}
+            <option value="{{ r.gebied }}" {% if r.gebied == gebied %}selected{% endif %}>
+                {{ r.gebied }} ({{ r.aantal_scans }} scan{{ "s" if r.aantal_scans != 1 else "" }})
+            </option>
+            {% endfor %}
+        </select>
+    </label>
+    {% else %}
+    <label>
+        Scanregio + categorieën (exacte selectie)
+        <select name="reeks" onchange="this.form.submit()">
+            {% for r in scanreeksen %}
+            <option value="{{ r.gebied }}||{{ r.categorieen }}" {% if r.gebied == gebied and r.categorieen == categorieen %}selected{% endif %}>
+                {{ r.gebied }} · {{ r.categorieen }} ({{ r.aantal_scans }} scan{{ "s" if r.aantal_scans != 1 else "" }})
+            </option>
+            {% endfor %}
+        </select>
+    </label>
+    {% endif %}
+</form>
+<p class="dashboard-scanreeks-melding">
+    Deze trend vertegenwoordigt uitsluitend scans met EXACT dezelfde regioselectie{{ " en categorieën" if markt == "bedrijfsmatig" else "" }} -
+    andere scanreeksen worden nooit stilzwijgend meegemengd (appels-met-peren-preventie).
+</p>
 
-<section class="card">
-    <h2>Prijssegmenten</h2>
-    <p class="placeholder">Nog geen data beschikbaar.</p>
-</section>
+{% if markt == "woningen" and trend and trend.uitgesloten_door_methodiekbreuk %}
+<p class="melding melding-historisch">
+    <strong>Let op:</strong> {{ trend.uitgesloten_door_methodiekbreuk }} oudere scan(s) van vóór de scanmethodiek-wijziging op {{ methodiek_wijziging_weergave }} zijn hier bewust uitgesloten van de trend (zouden een fictieve aanbodsprong/prijsontwikkeling suggereren). Deze scans blijven volledig raadpleegbaar via Historische Analyse op de Analysepagina.
+</p>
+{% endif %}
 
-<section class="card">
-    <h2>Historische ontwikkeling</h2>
-    <p class="placeholder">Nog geen data beschikbaar.</p>
-</section>
+{% if trend and trend.reeks | length < 2 %}
+<p class="melding">Voor deze scanregio is nog maar {{ trend.reeks | length }} scan beschikbaar (binnen de huidige meetreeks) - een trend/ontwikkeling wordt zichtbaar zodra er minimaal twee vergelijkbare scans zijn.</p>
+{% endif %}
+
+{% if trend and trend.reeks %}
+<div class="kpi-grid kpi-grid-3">
+    {% set laatste = trend.reeks[-1] %}
+    <div class="kpi-card">
+        <span class="kpi-label">{{ "Totaal aanbod" if markt == "woningen" else "Actief aanbod" }} (laatste scan)</span>
+        <span class="kpi-value">{{ laatste.totaal_aanbod if markt == "woningen" else laatste.actief_aanbod }}</span>
+        <span class="kpi-sublabel">{{ laatste.scanmoment_weergave }}</span>
+    </div>
+    {% if laatste.nieuw_aanbod is not none %}
+    <div class="kpi-card">
+        <span class="kpi-label">Nieuw aanbod (t.o.v. vorige scan)</span>
+        <span class="kpi-value">{{ laatste.nieuw_aanbod }}</span>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-label">Uit aanbod (t.o.v. vorige scan)</span>
+        <span class="kpi-value">{{ laatste.uit_aanbod }}</span>
+        <span class="kpi-sublabel">niet meer aangetroffen - NIET automatisch verkocht/verhuurd</span>
+    </div>
+    {% endif %}
+</div>
+
+<h2 class="sectie-titel">1. Aanbodontwikkeling</h2>
+{% if grafiek_aanbod %}
+<div class="grafiek-wrap">
+    <div class="grafiek-titel">{{ "Totaal aanbod vs. beschikbaar" if markt == "woningen" else "Actief aanbod" }} per scan</div>
+    {{ grafiek_aanbod | safe }}
+    <div class="grafiek-legenda">
+        {% if markt == "woningen" %}
+        <span class="grafiek-legenda-item"><span class="grafiek-legenda-kleur" style="background:#2f6fed"></span>Totaal aanbod</span>
+        <span class="grafiek-legenda-item"><span class="grafiek-legenda-kleur" style="background:#1b7a4b"></span>Beschikbaar</span>
+        {% else %}
+        <span class="grafiek-legenda-item"><span class="grafiek-legenda-kleur" style="background:#2f6fed"></span>Actief aanbod</span>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<p class="melding">Onvoldoende data voor een aanbodgrafiek.</p>
+{% endif %}
+
+<h2 class="sectie-titel">2. Marktaandeel makelaars</h2>
+{% if trend.top_makelaars %}
+<p class="subtabel-titel">De makelaars die in de meest recente scan het grootste aandeel objecten hadden. Ontwikkeling = verschil in PROCENTPUNT tussen de laatste twee vergelijkbare scans (niet procentuele groei).</p>
+
+{% if trend.reeks | length >= 2 %}
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Makelaar</th>
+                <th class="num">Vorige scan ({{ trend.reeks[-2].scanmoment_weergave }})</th>
+                <th class="num">Huidige scan ({{ trend.reeks[-1].scanmoment_weergave }})</th>
+                <th class="num">Ontwikkeling</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in trend.top_makelaars %}
+            <tr>
+                <td class="wrap-cell">{{ m.makelaar }}</td>
+                <td class="num">{{ (m.vorige_pct ~ "%") if m.vorige_pct is not none else "-" }}</td>
+                <td class="num">{{ (m.huidige_pct ~ "%") if m.huidige_pct is not none else "-" }}</td>
+                <td class="num">
+                    {% if m.procentpunt_ontwikkeling is not none %}
+                    <span class="{% if m.procentpunt_ontwikkeling > 0 %}trend-omhoog{% elif m.procentpunt_ontwikkeling < 0 %}trend-omlaag{% endif %}">
+                        {{ "+" if m.procentpunt_ontwikkeling > 0 else "" }}{{ m.procentpunt_ontwikkeling }} pp
+                    </span>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+<p class="subtabel-titel">Volledige reeks per scanmoment:</p>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Makelaar</th>
+                {% for p in trend.reeks %}<th class="num">{{ p.scanmoment_weergave }}</th>{% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in trend.top_makelaars %}
+            <tr>
+                <td class="wrap-cell">{{ m.makelaar }}</td>
+                {% for pct in m.aandeel_per_scan %}<td class="num">{{ (pct ~ "%") if pct is not none else "-" }}</td>{% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="melding">Nog maar 1 scan beschikbaar voor deze reeks - alleen de huidige marktpositie wordt getoond. Ontwikkeling (in procentpunt) wordt zichtbaar na de volgende vergelijkbare scan.</p>
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Makelaar</th>
+                <th class="num">Huidig marktaandeel</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in trend.top_makelaars %}
+            <tr>
+                <td class="wrap-cell">{{ m.makelaar }}</td>
+                <td class="num">{{ (m.huidige_pct ~ "%") if m.huidige_pct is not none else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% else %}
+<p class="melding">Nog geen makelaarsgegevens voor deze scanreeks.</p>
+{% endif %}
+
+<h2 class="sectie-titel">3. Prijsontwikkeling</h2>
+{% if grafiek_prijs %}
+<div class="grafiek-wrap">
+    <div class="grafiek-titel">{{ "Vraagprijs" if markt == "woningen" else "Huur €/m²/jaar" }} per scan</div>
+    {{ grafiek_prijs | safe }}
+    <div class="grafiek-legenda">
+        <span class="grafiek-legenda-item"><span class="grafiek-legenda-kleur" style="background:#2f6fed"></span>{{ "Gemiddelde" if markt == "woningen" else "Gemiddelde" }}</span>
+        <span class="grafiek-legenda-item"><span class="grafiek-legenda-kleur" style="background:#b3261e"></span>Mediaan</span>
+    </div>
+</div>
+{% else %}
+<p class="melding">Onvoldoende data voor een prijsgrafiek.</p>
+{% endif %}
+
+<h2 class="sectie-titel">4. Overige marktinformatie</h2>
+{% if markt == "bedrijfsmatig" %}
+<div class="table-wrap">
+    <table class="data-table data-table-compact">
+        <thead>
+            <tr>
+                <th>Scanmoment</th>
+                <th class="num">Actief aanbod</th>
+                <th class="num">Aangeboden m²</th>
+                <th class="num">Totale koopvraagwaarde</th>
+                <th class="num">Berekende jaarhuur</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in trend.reeks %}
+            <tr>
+                <td>{{ p.scanmoment_weergave }}</td>
+                <td class="num">{{ p.actief_aanbod }}</td>
+                <td class="num">{{ (p.m2_totaal ~ " m²") if p.m2_totaal is not none else "-" }}</td>
+                <td class="num">{{ ("€ " ~ "{:,.0f}".format(p.koopwaarde_totaal).replace(",", ".")) if p.koopwaarde_totaal is not none else "-" }}</td>
+                <td class="num">{{ ("€ " ~ "{:,.0f}".format(p.jaarhuur_totaal).replace(",", ".")) if p.jaarhuur_totaal is not none else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="melding">Zie hierboven (nieuw/uit aanbod).</p>
+{% endif %}
+
+{% else %}
+<p class="melding">Geen data voor deze scanregio.</p>
+{% endif %}
+{% endif %}
 {% endblock %}

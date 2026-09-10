@@ -6,7 +6,26 @@ document.addEventListener("DOMContentLoaded", function () {
     initNieuweScanValidatie();
     initNieuweBusinessScanValidatie();
     initSorteerbareTabel();
+    initMakelaarsTop5();
 });
+
+// Makelaarspositie toont standaard de eerste 5 rijen (server-side al
+// gemarkeerd met class "rij-extra hidden"); deze knop toont/verbergt de
+// rest. Puur UI - de tabel zelf bevat nog altijd ALLE makelaars, dus geen
+// backenddata wordt beperkt.
+function initMakelaarsTop5() {
+    document.querySelectorAll("[data-toon-meer-makelaars]").forEach(function (knop) {
+        knop.addEventListener("click", function () {
+            const table = knop.closest(".table-wrap").querySelector("table");
+            const extraRijen = table.querySelectorAll("tr.rij-extra");
+            const nuVerborgen = extraRijen.length > 0 && extraRijen[0].classList.contains("hidden");
+            extraRijen.forEach(function (rij) {
+                rij.classList.toggle("hidden", !nuVerborgen);
+            });
+            knop.textContent = nuVerborgen ? knop.dataset.minderLabel : knop.dataset.meerLabel;
+        });
+    });
+}
 
 function initTabs() {
     const tabs = document.querySelectorAll(".tab");

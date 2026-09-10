@@ -47,7 +47,18 @@ from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse, urljoin
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from _stopcontrole import ScanGestopt, controleer_stop, STOP_EXITCODE
+
 DEFAULT_URL = "https://www.funda.nl/zoeken/koop?selected_area=uden"
+
+# Bestandsnaam van het coöperatieve stopvlag-bestand, gezocht in --output-map
+# (zie DEEL B). Zelfde mechanisme als de Business-scanner, maar in de eigen
+# outputmap van deze scanner - zie ook scanner/_stopcontrole.py.
+STOP_FLAG_NAAM = "_woningen_scan_stop.flag"
+
+# Maximale wachttijd op een menscontrole/captcha voordat de scan alsnog wordt
+# afgebroken (begrensde timeout, geen oneindig wachten - net als Business).
+MENSCONTROLE_MAX_WACHT_S = 1800
 
 FIELDS = [
     "Peildatum", "Plaats", "Gevonden_bij_scan",
@@ -79,6 +90,12 @@ def cli():
         help="Veilig maximum per plaats; scanner stopt eerder als er geen nieuwe resultaten meer zijn."
     )
     p.add_argument("--delay", type=float, default=0.7)
+    p.add_argument(
+        "--output-map",
+        default=".",
+        help="Map voor checkpoint/eindbestanden en het stopvlag-bestand (zie DEEL B). "
+             "Standaard de huidige map, voor compatibiliteit met eerder CLI-gebruik."
+    )
     return p.parse_args()
 
 
@@ -172,30 +189,53 @@ def needs_human(page):
     ])
 
 
-def pause(url, reason):
+def pause(page, reason, stop_flag_pad):
+    """Wacht op menscontrole/captcha ZONDER blokkerende input()/ENTER: peilt
+    elke 2s of (a) een stop is aangevraagd of (b) de controle in het
+    zichtbare Chrome-venster al is opgelost (needs_human() weer False), en
+    gaat dan vanzelf verder. Begrensd door MENSCONTROLE_MAX_WACHT_S en op elk
+    moment onderbreekbaar via het stopvlag-bestand. Zelfde patroon als de
+    inmiddels goedgekeurde Business-scanner (zie DEEL A/B)."""
     say("\n" + "=" * 72)
     say("FUNDA HEEFT AANDACHT NODIG")
     say(reason)
-    say(f"Pagina: {url}")
-    input("Controleer Chrome, los zo nodig de controle op en druk ENTER... ")
+    say(f"Pagina: {page.url}")
+    say("Wacht op handmatige Funda-verificatie. Los dit op in het zichtbare "
+        "Chrome-venster - de scan gaat automatisch verder zodra Funda weer "
+        "normale resultaten toont. Geen ENTER nodig.")
 
-
-def safe_goto(page, url, wait_ms=1400):
+    gewacht_s = 0.0
     while True:
+        controleer_stop(stop_flag_pad)
+        time.sleep(2)
+        gewacht_s += 2
+        if not needs_human(page):
+            say("Verificatie lijkt opgelost - scan gaat automatisch verder.")
+            return
+        if gewacht_s >= MENSCONTROLE_MAX_WACHT_S:
+            raise SystemExit(
+                f"Menscontrole niet binnen {int(MENSCONTROLE_MAX_WACHT_S)}s opgelost - "
+                "scan afgebroken. Start opnieuw en los de controle sneller op."
+            )
+
+
+def safe_goto(page, url, stop_flag_pad, wait_ms=1400):
+    while True:
+        controleer_stop(stop_flag_pad)
         try:
             page.goto(url, wait_until="commit", timeout=30000)
             page.wait_for_timeout(wait_ms)
             if needs_human(page):
-                pause(url, "Robot-/menscontrole zichtbaar.")
+                pause(page, "Robot-/menscontrole zichtbaar.", stop_flag_pad)
                 continue
             return
         except KeyboardInterrupt:
             raise
         except Exception as exc:
-            pause(url, f"Navigatieprobleem: {exc}")
+            pause(page, f"Navigatieprobleem: {exc}", stop_flag_pad)
 
 
-def resultaten_automatisch_gereed(page, timeout_ms=15000):
+def resultaten_automatisch_gereed(page, stop_flag_pad, timeout_ms=15000):
     """
     Probeert zonder handmatige ENTER-bevestiging vast te stellen dat de
     normale Funda-zoekresultaten klaar zijn om uit te lezen:
@@ -206,19 +246,23 @@ def resultaten_automatisch_gereed(page, timeout_ms=15000):
       2. controleert daarna nogmaals op een mens-/captchacontrole
          (dezelfde needs_human()-detectie als elders in dit script).
 
-    Retourneert True als dit automatisch is vastgesteld. Retourneert False
-    als dit niet binnen timeout_ms betrouwbaar lukte; de aanroeper valt dan
-    terug op de bestaande handmatige ENTER-bevestiging.
-    """
+    Retourneert True als dit automatisch is vastgesteld (of als er een
+    menscontrole was die inmiddels is opgelost). Retourneert False als er
+    binnen timeout_ms geen enkele detail-link verscheen - de aanroeper
+    behandelt dat NIET als fout maar als een mogelijk geldig "0 aanbod"-
+    resultaat (zie DEEL A: geen blokkerende ENTER-fallback meer)."""
     try:
         page.locator('a[href*="/detail/koop/"]').first.wait_for(
             state="attached", timeout=timeout_ms
         )
     except PlaywrightTimeoutError:
+        if needs_human(page):
+            pause(page, "Mens-/captchacontrole gedetecteerd (timeout bij wachten op resultaten).", stop_flag_pad)
+            return resultaten_automatisch_gereed(page, stop_flag_pad, timeout_ms)
         return False
 
     if needs_human(page):
-        pause(page.url, "Mens-/captchacontrole gedetecteerd vóór het uitlezen.")
+        pause(page, "Mens-/captchacontrole gedetecteerd vóór het uitlezen.", stop_flag_pad)
 
     return True
 
@@ -297,22 +341,45 @@ def all_detail_anchors(page):
         return []
 
 
+def _unieke_detail_urls_in(node, base_url):
+    """Aantal UNIEKE koop-detailpagina's waarnaar binnen deze DOM-node wordt
+    verwezen. Telt bewust UNIEKE URL's, niet het aantal <a>-elementen: Funda's
+    huidige resultaatkaart-ontwerp bevat vaak meerdere losse links naar
+    dezelfde eigen detailpagina (foto, titel, 'Bekijk dit huis'-knop) - een
+    kale telling van <a>-elementen overschat daardoor het aantal kaarten en
+    laat een geldige, enkele kaart onterecht afvallen (root cause van het
+    ontbreken van een groot deel van de resultaten, live bevestigd op
+    2026-09-09 - zie docs/CLAUDE_STATUS.md)."""
+    hrefs = node.locator('a[href*="/detail/koop/"]').evaluate_all(
+        "els => els.map(e => e.getAttribute('href'))"
+    )
+    uniek = set()
+    for h in hrefs:
+        if not h:
+            continue
+        if h.startswith("/"):
+            h = urljoin(base_url, h)
+        uniek.add(canonical(h))
+    return len(uniek)
+
+
 def ancestor_card(anchor, max_text=2200):
     node = anchor
     best = None
+    base_url = anchor.page.url
     for _ in range(9):
         try:
             node = node.locator("..")
             txt = clean(node.inner_text(timeout=400))
             tag = node.evaluate("e => e.tagName.toLowerCase()")
-            links = node.locator('a[href*="/detail/koop/"]').count()
+            unieke_urls = _unieke_detail_urls_in(node, base_url)
         except Exception:
             break
-        if txt and links <= 2 and len(txt) <= max_text and ("€" in txt or "m²" in txt):
+        if txt and unieke_urls == 1 and len(txt) <= max_text and ("€" in txt or "m²" in txt):
             best = node
             if tag in ("article", "li"):
                 return node
-        if links > 4 or len(txt) > 3000:
+        if unieke_urls > 1 or len(txt) > 3000:
             break
     return best
 
@@ -636,8 +703,8 @@ def parse_m2(txt):
     return int(m.group(1)) if m else ""
 
 
-def enrich_top_detail(page, row):
-    safe_goto(page, row["Funda_detail_URL"], 1500)
+def enrich_top_detail(page, row, stop_flag_pad):
+    safe_goto(page, row["Funda_detail_URL"], stop_flag_pad, 1500)
     pairs = detail_pairs(page)
     txt = body_text(page)
 
@@ -757,16 +824,21 @@ def main():
     if not places:
         raise SystemExit("Geen plaatsen opgegeven.")
 
+    outdir = Path(opt.output_map)
+    outdir.mkdir(parents=True, exist_ok=True)
+    stop_flag_pad = outdir / STOP_FLAG_NAAM
+
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     label = safe_output_name(places)
 
-    checkpoint = Path.cwd() / f"makelaarsmonitor_{label}_{stamp}_checkpoint.csv"
-    final_all = Path.cwd() / f"makelaarsmonitor_{label}_{stamp}_alles.csv"
-    final_existing = Path.cwd() / f"makelaarsmonitor_{label}_{stamp}_bestaande_bouw.csv"
-    final_new = Path.cwd() / f"makelaarsmonitor_{label}_{stamp}_nieuwbouw.csv"
+    checkpoint = outdir / f"makelaarsmonitor_{label}_{stamp}_checkpoint.csv"
+    final_all = outdir / f"makelaarsmonitor_{label}_{stamp}_alles.csv"
+    final_existing = outdir / f"makelaarsmonitor_{label}_{stamp}_bestaande_bouw.csv"
+    final_new = outdir / f"makelaarsmonitor_{label}_{stamp}_nieuwbouw.csv"
 
     combined_by_url = {}
     summary = []
+    gestopt = False
 
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
@@ -779,210 +851,266 @@ def main():
         )
         page = context.pages[0] if context.pages else context.new_page()
 
-        for place_index, place in enumerate(places, 1):
-            base_url = base_url_for_place(place)
-            expected = wanted_area(base_url)
+        try:
+            for place_index, place in enumerate(places, 1):
+                controleer_stop(stop_flag_pad)
+                base_url = base_url_for_place(place)
+                expected = wanted_area(base_url)
 
-            say("\n" + "=" * 72)
-            say(f"PLAATS {place_index}/{len(places)}: {place}")
-            say(f"Funda gebied: {expected}")
+                say("\n" + "=" * 72)
+                say(f"PLAATS {place_index}/{len(places)}: {place}")
+                say(f"Aangevraagde URL: {page_url(base_url, 1)}")
+                say(f"Funda gebied (verwacht): {expected}")
 
-            safe_goto(page, page_url(base_url, 1), 1800)
-
-            ok, reason = area_guard(page, expected)
-            if not ok:
-                pause(page.url, f"Gebiedscontrole mislukt voor {place}: {reason}")
-
-            if place_index == 1:
-                if resultaten_automatisch_gereed(page):
-                    say("Resultaten automatisch gereed bevonden (detail-links aanwezig, geen mens-/captchacontrole).")
-                else:
-                    say("Automatische gereedheidscontrole kon dit niet binnen de tijd bevestigen.")
-                    input("Druk ENTER zodra de normale zoekresultaten zichtbaar zijn... ")
-
-            scroll_results(page)
-
-            # Toppositie uitsluitend op pagina 1 van deze plaats.
-            top_rows = {}
-            for a, u in top_cards(page):
-                if u not in top_rows:
-                    top_rows[u] = parse_top_card(a, u, place)
-
-            rows = {}
-            previous_page_urls = None
-
-            for nr in range(1, opt.max_pages + 1):
-                url = page_url(base_url, nr)
-                safe_goto(page, url, 1300)
+                safe_goto(page, page_url(base_url, 1), stop_flag_pad, 1800)
+                say(f"Uiteindelijke URL: {page.url}")
 
                 ok, reason = area_guard(page, expected)
                 if not ok:
-                    pause(
-                        page.url,
-                        f"{place} pagina {nr} afgekeurd door gebiedsbeveiliging: {reason}"
-                    )
-                    safe_goto(page, page_url(base_url, nr), 1500)
+                    # BELANGRIJK (DEEL A): een mislukte gebiedscontrole betekent
+                    # hier NIET automatisch een captcha - meestal herkent Funda
+                    # de plaats-slug simpelweg niet en valt stilletjes terug op
+                    # de algemene /zoeken/koop-resultaten (bevestigd via live
+                    # onderzoek, bv. bij Vinkel). Dat is GEEN geldige "0 aanbod"-
+                    # uitkomst en mag nooit als plaatsresultaat worden gebruikt.
+                    # Geen blokkerende pause()/ENTER hier - éénmalig herladen
+                    # als mogelijke transiënte glitch, anders deze plaats
+                    # overslaan met duidelijke logging en doorgaan.
+                    say(f"Gebiedscontrole mislukt voor {place}: {reason}")
+                    controleer_stop(stop_flag_pad)
+                    time.sleep(2)
+                    safe_goto(page, page_url(base_url, 1), stop_flag_pad, 1800)
+                    say(f"Uiteindelijke URL (2e poging): {page.url}")
                     ok, reason = area_guard(page, expected)
-                    if not ok:
-                        say(f"STOP {place}: pagina {nr} blijft buiten het gewenste gebied.")
-                        break
+
+                if not ok:
+                    say(
+                        f"WAARSCHUWING: Funda herkent '{place}' niet als eigen zoekgebied "
+                        f"(reden: {reason}). Dit lijkt een algemene fallback-pagina, GEEN "
+                        f"plaatsspecifiek resultaat - er worden GEEN objecten van deze "
+                        f"fallback-pagina als resultaat van {place} opgeslagen. {place} "
+                        "wordt overgeslagen (dit is NIET hetzelfde als '0 aanbod')."
+                    )
+                    summary.append((place, 0, 0, 0, 0, 0, 0, "gebied niet herkend door Funda"))
+                    continue
+
+                if resultaten_automatisch_gereed(page, stop_flag_pad):
+                    say("Resultaten automatisch gereed bevonden (resultaatcontainer met detail-links aanwezig).")
+                else:
+                    say(
+                        "Geen enkele detail-link gevonden binnen de wachttijd. Gebied is wél "
+                        "herkend door Funda, dus dit wordt behandeld als een mogelijk geldig "
+                        "'0 aanbod'-resultaat voor deze plaats (geen blokkerende ENTER meer)."
+                    )
 
                 scroll_results(page)
-                anchors = all_detail_anchors(page)
-                current_urls = [u for _, u in anchors]
 
-                # Automatisch einde:
-                # - helemaal geen resultaatlinks, of
-                # - exact dezelfde set als vorige pagina.
-                if not current_urls:
-                    say(f"Pagina {nr:>2}: geen resultaten meer -> einde {place}.")
-                    break
+                # Toppositie uitsluitend op pagina 1 van deze plaats.
+                top_rows = {}
+                for a, u in top_cards(page):
+                    if u not in top_rows:
+                        top_rows[u] = parse_top_card(a, u, place)
 
-                if previous_page_urls is not None and set(current_urls) == set(previous_page_urls):
-                    say(f"Pagina {nr:>2}: dezelfde resultaten als vorige pagina -> einde {place}.")
-                    break
+                rows = {}
+                previous_page_urls = None
+                bezochte_pagina_urls = set()
 
-                previous_page_urls = current_urls
+                for nr in range(1, opt.max_pages + 1):
+                    controleer_stop(stop_flag_pad)
+                    url = page_url(base_url, nr)
 
-                before = len(rows)
-                for a, u in anchors:
-                    if u in top_rows or u in rows:
-                        continue
-                    row = parse_regular_card(a, u, nr, place)
-                    if row is not None:
-                        rows[u] = row
+                    if url in bezochte_pagina_urls:
+                        say(f"Pagina {nr:>2}: URL al eerder bezocht -> einde {place}.")
+                        break
+                    bezochte_pagina_urls.add(url)
 
-                # Als een pagina alleen duplicaten oplevert, stoppen we ook.
-                new_count = len(rows) - before
-                if nr > 1 and new_count == 0:
-                    say(f"Pagina {nr:>2}: geen nieuwe unieke objecten -> einde {place}.")
-                    break
+                    safe_goto(page, url, stop_flag_pad, 1300)
 
-                preview = list(combined_by_url.values()) + list(top_rows.values()) + list(rows.values())
-                write_csv(checkpoint, preview)
+                    ok, reason = area_guard(page, expected)
+                    if not ok:
+                        # Gebied kwijtgeraakt halverwege de paginering (bv. Funda
+                        # geeft bij een hoog paginanummer soms een fallback). Geen
+                        # blokkerende pause meer: eerder verzamelde pagina's van
+                        # DEZE plaats blijven gewoon geldig, we stoppen alleen de
+                        # verdere paginering hier.
+                        say(f"Pagina {nr:>2} van {place} buiten het gewenste gebied ({reason}) -> einde {place}.")
+                        break
 
-                say(
-                    f"Pagina {nr:>2}: {len(anchors):>2} detail-links | "
-                    f"{new_count:>2} nieuwe gewone objecten | "
-                    f"totaal {place}: {len(top_rows) + len(rows)}"
-                )
+                    scroll_results(page)
+                    anchors = all_detail_anchors(page)
+                    current_urls = [u for _, u in anchors]
 
-                if opt.delay:
-                    time.sleep(opt.delay)
+                    # Automatisch einde:
+                    # - helemaal geen resultaatlinks, of
+                    # - exact dezelfde set als vorige pagina.
+                    if not current_urls:
+                        say(f"Pagina {nr:>2}: geen resultaten meer -> einde {place}.")
+                        break
 
-            # Alleen Toppositie-details bezoeken.
-            if top_rows:
-                say(f"\nToppositie {place}: {len(top_rows)} object(en) via detailpagina aanvullen.")
-                for i, u in enumerate(list(top_rows.keys())[:3], 1):
-                    say(f"  [{i}/{min(3, len(top_rows))}] {u}")
-                    try:
-                        top_rows[u] = enrich_top_detail(page, top_rows[u])
-                    except Exception as exc:
-                        top_rows[u]["Waarschuwing"] = clean(
-                            (
-                                top_rows[u].get("Waarschuwing", "")
-                                + f"; detailfout: {exc}"
-                            ).strip("; ")
-                        )
-                    write_csv(
-                        checkpoint,
-                        list(combined_by_url.values()) + list(top_rows.values()) + list(rows.values())
+                    if previous_page_urls is not None and set(current_urls) == set(previous_page_urls):
+                        say(f"Pagina {nr:>2}: dezelfde resultaten als vorige pagina -> einde {place}.")
+                        break
+
+                    previous_page_urls = current_urls
+
+                    before = len(rows)
+                    for a, u in anchors:
+                        if u in top_rows or u in rows:
+                            continue
+                        row = parse_regular_card(a, u, nr, place)
+                        if row is not None:
+                            rows[u] = row
+
+                    # Als een pagina alleen duplicaten oplevert, stoppen we ook.
+                    new_count = len(rows) - before
+                    if nr > 1 and new_count == 0:
+                        say(f"Pagina {nr:>2}: geen nieuwe unieke objecten -> einde {place}.")
+                        break
+
+                    preview = list(combined_by_url.values()) + list(top_rows.values()) + list(rows.values())
+                    write_csv(checkpoint, preview)
+
+                    say(
+                        f"Pagina {nr:>2}: {len(anchors):>2} detail-links | "
+                        f"{new_count:>2} nieuwe gewone objecten | "
+                        f"totaal {place}: {len(top_rows) + len(rows)}"
                     )
 
-            raw_place_rows = list(top_rows.values()) + list(rows.values())
+                    if opt.delay:
+                        time.sleep(opt.delay)
 
-            # Werkelijke plaats uit URL bepalen en buitengebied-advertenties verwijderen.
-            place_rows = []
-            rejected = 0
-            for r in raw_place_rows:
-                classify_newbuild(r)
-                if not finalize_row_place(r, places):
-                    rejected += 1
-                    continue
-                place_rows.append(r)
+                # Alleen Toppositie-details bezoeken.
+                if top_rows:
+                    say(f"\nToppositie {place}: {len(top_rows)} object(en) via detailpagina aanvullen.")
+                    for i, u in enumerate(list(top_rows.keys())[:3], 1):
+                        controleer_stop(stop_flag_pad)
+                        say(f"  [{i}/{min(3, len(top_rows))}] {u}")
+                        try:
+                            top_rows[u] = enrich_top_detail(page, top_rows[u], stop_flag_pad)
+                        except ScanGestopt:
+                            raise
+                        except Exception as exc:
+                            top_rows[u]["Waarschuwing"] = clean(
+                                (
+                                    top_rows[u].get("Waarschuwing", "")
+                                    + f"; detailfout: {exc}"
+                                ).strip("; ")
+                            )
+                        write_csv(
+                            checkpoint,
+                            list(combined_by_url.values()) + list(top_rows.values()) + list(rows.values())
+                        )
 
-                u = r.get("Funda_detail_URL", "")
-                if u in combined_by_url:
-                    combined_by_url[u] = merge_duplicate(combined_by_url[u], r)
-                else:
-                    combined_by_url[u] = r
+                raw_place_rows = list(top_rows.values()) + list(rows.values())
 
-            available = sum(1 for r in place_rows if r.get("Status") == "Beschikbaar")
-            existing = sum(1 for r in place_rows if r.get("Bouwcategorie") == "Bestaande bouw")
-            newbuild = sum(1 for r in place_rows if r.get("Bouwcategorie") == "Nieuwbouw")
+                # Werkelijke plaats uit URL bepalen en buitengebied-advertenties verwijderen.
+                place_rows = []
+                rejected = 0
+                for r in raw_place_rows:
+                    classify_newbuild(r)
+                    if not finalize_row_place(r, places):
+                        rejected += 1
+                        continue
+                    place_rows.append(r)
 
-            summary.append((place, len(raw_place_rows), len(place_rows), rejected, existing, newbuild, available))
+                    u = r.get("Funda_detail_URL", "")
+                    if u in combined_by_url:
+                        combined_by_url[u] = merge_duplicate(combined_by_url[u], r)
+                    else:
+                        combined_by_url[u] = r
 
-            say(
-                f"\n{place} klaar: {len(raw_place_rows)} bruto | "
-                f"{len(place_rows)} binnen gekozen gebied | {rejected} buitengebied verwijderd"
-            )
+                available = sum(1 for r in place_rows if r.get("Status") == "Beschikbaar")
+                existing = sum(1 for r in place_rows if r.get("Bouwcategorie") == "Bestaande bouw")
+                newbuild = sum(1 for r in place_rows if r.get("Bouwcategorie") == "Nieuwbouw")
 
-            write_csv(checkpoint, list(combined_by_url.values()))
+                opmerking = "" if raw_place_rows else "0 aanbod (geldig resultaat, gebied wel herkend)"
+                summary.append((place, len(raw_place_rows), len(place_rows), rejected, existing, newbuild, available, opmerking))
 
-        # Eindbestanden: één rij per unieke Funda-URL.
-        combined_rows = list(combined_by_url.values())
-        combined_rows.sort(key=lambda r: (
-            normalized_place(r.get("Plaats", "")),
-            clean(r.get("Adres", "")).casefold()
-        ))
+                say(
+                    f"\n{place} klaar: {len(raw_place_rows)} bruto | "
+                    f"{len(place_rows)} binnen gekozen gebied | {rejected} buitengebied verwijderd"
+                )
 
-        existing_rows = [r for r in combined_rows if r.get("Bouwcategorie") == "Bestaande bouw"]
-        new_rows = [r for r in combined_rows if r.get("Bouwcategorie") == "Nieuwbouw"]
+                write_csv(checkpoint, list(combined_by_url.values()))
+        except ScanGestopt:
+            gestopt = True
+            say("\nStop aangevraagd door gebruiker - scan wordt netjes afgebroken.")
+        finally:
+            # Playwright/Chrome ALTIJD netjes sluiten, ook bij een stop of een
+            # onverwachte fout - voorkomt een wees-Chrome-proces.
+            context.close()
 
-        write_csv(final_all, combined_rows)
-        write_csv(final_existing, existing_rows)
-        write_csv(final_new, new_rows)
+    if gestopt:
+        say("Scan afgebroken. Het checkpoint-bestand blijft staan (voor debugging), "
+            "maar er wordt bewust GEEN *_alles.csv geschreven en dus ook geen "
+            "historie-import uitgevoerd voor deze onvolledige scan.")
+        raise SystemExit(STOP_EXITCODE)
 
-        say("\n" + "=" * 72)
-        say("MAKELAARSMONITOR v4.1 KLAAR")
-        say("")
-        say("Per scan:")
-        for place, bruto, accepted, rejected, existing, newbuild, available in summary:
-            say(
-                f"  {place}: {bruto} bruto | {accepted} binnen selectie | "
-                f"{rejected} buitengebied verwijderd"
-            )
+    # Eindbestanden: één rij per unieke Funda-URL.
+    combined_rows = list(combined_by_url.values())
+    combined_rows.sort(key=lambda r: (
+        normalized_place(r.get("Plaats", "")),
+        clean(r.get("Adres", "")).casefold()
+    ))
 
-        say("\nWerkelijke objecten per plaats na deduplicatie:")
-        for place in places:
-            n = sum(1 for r in combined_rows if normalized_place(r.get("Plaats", "")) == normalized_place(place))
-            say(f"  {place}: {n}")
+    existing_rows = [r for r in combined_rows if r.get("Bouwcategorie") == "Bestaande bouw"]
+    new_rows = [r for r in combined_rows if r.get("Bouwcategorie") == "Nieuwbouw"]
 
-        say("")
-        urls = [r.get("Funda_detail_URL", "") for r in combined_rows if r.get("Funda_detail_URL")]
-        duplicate_count = len(urls) - len(set(urls))
-        outside_count = sum(
-            1 for r in combined_rows
-            if normalized_place(r.get("Plaats", "")) not in {normalized_place(p) for p in places}
-        )
+    write_csv(final_all, combined_rows)
+    write_csv(final_existing, existing_rows)
+    write_csv(final_new, new_rows)
 
-        say(f"Totaal unieke objecten: {len(combined_rows)}")
-        say(f"Dubbele Funda-URLs in eindbestand: {duplicate_count}")
-        say(f"Objecten buiten gekozen plaatsen: {outside_count}")
-        say(f"Bestaande bouw: {len(existing_rows)}")
-        say(f"Nieuwbouw: {len(new_rows)}")
-
-        statuses = {}
-        for r in existing_rows:
-            key = r.get("Status") or "Onbekend"
-            statuses[key] = statuses.get(key, 0) + 1
-
+    say("\n" + "=" * 72)
+    say("MAKELAARSMONITOR v4.1 KLAAR")
+    say("")
+    say("Per scan:")
+    for place, bruto, accepted, rejected, existing, newbuild, available, opmerking in summary:
         say(
-            "Status bestaande bouw: "
-            + " | ".join(f"{k}: {v}" for k, v in statuses.items())
+            f"  {place}: {bruto} bruto | {accepted} binnen selectie | "
+            f"{rejected} buitengebied verwijderd"
+            + (f" | {opmerking}" if opmerking else "")
         )
 
-        say("\nBestanden:")
-        say(f"  Alles:           {final_all}")
-        say(f"  Bestaande bouw:  {final_existing}")
-        say(f"  Nieuwbouw:       {final_new}")
-        say(f"  Checkpoint:      {checkpoint}")
-        say("\nUpload bij voorkeur het bestand *_alles.csv in ChatGPT.")
+    say("\nWerkelijke objecten per plaats na deduplicatie:")
+    for place in places:
+        n = sum(1 for r in combined_rows if normalized_place(r.get("Plaats", "")) == normalized_place(place))
+        say(f"  {place}: {n}")
+
+    say("")
+    urls = [r.get("Funda_detail_URL", "") for r in combined_rows if r.get("Funda_detail_URL")]
+    duplicate_count = len(urls) - len(set(urls))
+    outside_count = sum(
+        1 for r in combined_rows
+        if normalized_place(r.get("Plaats", "")) not in {normalized_place(p) for p in places}
+    )
+
+    say(f"Totaal unieke objecten: {len(combined_rows)}")
+    say(f"Dubbele Funda-URLs in eindbestand: {duplicate_count}")
+    say(f"Objecten buiten gekozen plaatsen: {outside_count}")
+    say(f"Bestaande bouw: {len(existing_rows)}")
+    say(f"Nieuwbouw: {len(new_rows)}")
+
+    statuses = {}
+    for r in existing_rows:
+        key = r.get("Status") or "Onbekend"
+        statuses[key] = statuses.get(key, 0) + 1
+
+    say(
+        "Status bestaande bouw: "
+        + " | ".join(f"{k}: {v}" for k, v in statuses.items())
+    )
+
+    say("\nBestanden:")
+    say(f"  Alles:           {final_all}")
+    say(f"  Bestaande bouw:  {final_existing}")
+    say(f"  Nieuwbouw:       {final_new}")
+    say(f"  Checkpoint:      {checkpoint}")
+    say("\nUpload bij voorkeur het bestand *_alles.csv in ChatGPT.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        say("\nScan afgebroken. Laatste checkpoint blijft behouden.")
+        say("\nScan afgebroken (Ctrl+C). Laatste checkpoint blijft behouden.")
+        raise SystemExit(STOP_EXITCODE)

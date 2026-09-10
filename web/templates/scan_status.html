@@ -20,11 +20,37 @@
         <span><strong>Status:</strong> Scan wordt uitgevoerd</span>
     </div>
     <p class="notice">
-        De scanner opent een apart, zichtbaar Chrome-venster en kan om een handmatige bevestiging
-        vragen (bijvoorbeeld "Druk ENTER zodra de resultaten zichtbaar zijn" of een captcha-controle).
-        Kijk in het consolevenster waarin <code>py app.py</code> draait: als daar een vraag staat,
-        beantwoord die daar. Deze pagina ververst zelf elke 5 seconden.
+        Controleer het Chrome-venster. Als Funda een menscontrole toont: <strong>wacht op handmatige Funda-verificatie</strong> -
+        los dit rechtstreeks op in dat zichtbare Chrome-venster. De scan gaat automatisch verder zodra Funda weer
+        normale resultaten toont; er is geen ENTER in de console meer nodig.
     </p>
+    <p class="melding">Deze pagina ververst zelf elke 5 seconden.</p>
+
+    {% if scan.stop_aangevraagd %}
+    <p class="melding melding-fout">Stop wordt uitgevoerd...</p>
+    {% else %}
+    <form method="post" action="{{ url_for('scan_stop') }}" class="inline-form">
+        <button type="submit" class="secondary-button">Scan afbreken</button>
+    </form>
+    {% endif %}
+</div>
+
+{% elif scan.status == "gestopt" %}
+<h1>Scan afgebroken</h1>
+<div class="card">
+    <div class="analyse-context">
+        <span><strong>Regio's:</strong> {{ scan.regios | join(", ") if scan.regios else "-" }}</span>
+        <span><strong>Gestart om:</strong> {{ scan.gestart_om_weergave if scan.gestart_om_weergave else "-" }}</span>
+        <span><strong>Afgebroken om:</strong> {{ scan.eind_om_weergave if scan.eind_om_weergave else "-" }}</span>
+    </div>
+    <p class="melding">
+        De scan is op verzoek gestopt. Er is GEEN historie-import uitgevoerd - de database bevat nog
+        uitsluitend de laatst succesvol voltooide scan.
+    </p>
+    <div class="analyse-knoppen">
+        <a class="secondary-button" href="{{ url_for('index', tab='woningen') }}">Nieuwe scan starten</a>
+        <a class="secondary-button" href="{{ url_for('index', tab='woningen') }}">Terug naar Woningen</a>
+    </div>
 </div>
 
 {% elif scan.status == "success" %}

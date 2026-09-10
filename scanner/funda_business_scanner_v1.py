@@ -39,6 +39,8 @@ from urllib.parse import urlparse, urljoin
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from _stopcontrole import ScanGestopt, controleer_stop, STOP_EXITCODE
+
 # Gebruikersterm -> Funda's eigen objecttype-slug in de URL.
 OBJECTTYPE_SLUGS = {
     "Kantoor": "kantoor",
@@ -50,29 +52,14 @@ OBJECTTYPE_SLUGS = {
 # lopende scan netjes te laten afbreken; de scanner controleert het op
 # meerdere veilige punten (voor elke navigatie, in de paginalus, tijdens een
 # menscontrole-wachtperiode) en ruimt zelf Playwright/Chrome op vóór het stopt.
+# ScanGestopt/controleer_stop/STOP_EXITCODE komen uit _stopcontrole.py, samen
+# met de woningenscanner (zie DEEL B) - alleen de bestandsnaam blijft hier
+# lokaal, zodat een reeds werkende constante niet hoeft te veranderen.
 STOP_FLAG_NAAM = "_business_scan_stop.flag"
-
-# Afsluitcode bij een bewust (coöperatief of Ctrl+C) afgebroken scan - apart
-# van 0 (succes) en de standaard-1-bij-onverwachte-fout, zodat app.py een
-# gebruikersstop betrouwbaar kan onderscheiden van een echte crash.
-STOP_EXITCODE = 3
 
 # Maximale wachttijd op een menscontrole/captcha voordat de scan alsnog wordt
 # afgebroken (begrensde timeout, geen oneindig wachten - zie pause()).
 MENSCONTROLE_MAX_WACHT_S = 1800
-
-
-class ScanGestopt(BaseException):
-    """Intern signaal dat de gebruiker een stop heeft aangevraagd (via het
-    stopvlag-bestand). Erft bewust van BaseException (net als
-    KeyboardInterrupt/SystemExit) zodat generieke 'except Exception'-blokken
-    dit nooit per ongeluk opvangen en als een gewone navigatiefout
-    behandelen."""
-
-
-def controleer_stop(stop_flag_pad: Path) -> None:
-    if stop_flag_pad.exists():
-        raise ScanGestopt()
 
 FIELDS = [
     "Peildatum", "Plaats", "Gezocht_categorie", "Objecttype", "Status",
