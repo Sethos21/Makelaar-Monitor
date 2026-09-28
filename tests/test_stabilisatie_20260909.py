@@ -44,9 +44,9 @@ def test_methodiekbreuk_kern(con) -> None:
         and appmod.woningen_is_nieuwe_methodiek("2026-09-09T10:09:54"),
     )
 
-    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
-    check("actuele scan voor dit gebied is scan_id 7 (118 objecten)", r["scaninfo"]["scan_id"] == 7 and r["kpis"]["aantal_objecten"] == 118)
+    check("scan_id 7 (eerste post-methodiek-scan van dit gebied) geladen met 118 objecten", r["scaninfo"]["scan_id"] == 7 and r["kpis"]["aantal_objecten"] == 118)
     check("is_nieuwe_methodiek == True voor scan 7", r["is_nieuwe_methodiek"] is True)
     check(
         "GEEN fictieve vergelijking over de grens: netto_verandering is None (geen +81)",
@@ -89,13 +89,13 @@ def test_methodiekbreuk_volgende_nieuwe_scan_vergelijkbaar(con) -> None:
 def test_top5_makelaars_backend_onbeperkt() -> None:
     """2. Top 5 is uitsluitend UI - de makelaarstabel/backend bevat nog ALLE
     makelaars; de HTML bevat ze ook allemaal (alleen CSS-verborgen)."""
-    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
     check("backend makelaarstabel bevat > 5 makelaars (niet afgekapt)", len(r["makelaarstabel"]) > 5, f"({len(r['makelaarstabel'])})")
 
     appmod.app.testing = True
     client = appmod.app.test_client()
-    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles")]
+    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles"), ("scan_id", "7")]
     resp = client.get("/analyse", query_string=qs)
     html = resp.get_data(as_text=True)
     verborgen_rijen = html.count("rij-extra hidden")
@@ -118,7 +118,7 @@ def test_top5_makelaars_backend_onbeperkt() -> None:
 
 def test_nulgebieden() -> None:
     """3. Nulgebieden: geselecteerde plaats met 0 aanbod blijft zichtbaar."""
-    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
     vinkel = next((p for p in r["plaatsverdeling"] if p["plaats"] == "Vinkel"), None)
     check("Vinkel zichtbaar in plaatsverdeling ondanks 0 aanbod", vinkel is not None)
@@ -146,7 +146,7 @@ def test_nulgebieden() -> None:
 def test_lokale_marktpositie() -> None:
     """4. Makelaarsprofiel: lokale marktpositie per plaats/gemeente, dynamisch
     berekend (geen hardcoded cijfers) - Kordaat + een tweede makelaar."""
-    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
     rijen = r["ruwe_rijen"]
 
@@ -173,7 +173,7 @@ def test_funda_link_geen_gok() -> None:
     """5. Funda-link: nooit gokken op basis van de naam. Kordaat + een tweede
     makelaar moeten BEIDE geen link krijgen (geen betrouwbare bron in de
     huidige scan-/detaildata - expliciet onderzocht en gedocumenteerd)."""
-    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
     for naam in ["Kordaat Makelaars", "Bernheze Makelaars", "Volledig Fictieve Naam XYZ"]:
         link = appmod.bepaal_funda_makelaar_link(naam, r["ruwe_rijen"])
@@ -181,7 +181,7 @@ def test_funda_link_geen_gok() -> None:
 
     appmod.app.testing = True
     client = appmod.app.test_client()
-    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles")]
+    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles"), ("scan_id", "7")]
     for naam in ["Kordaat Makelaars", "Bernheze Makelaars"]:
         resp = client.get("/makelaar/woningen/" + quote(naam), query_string=qs)
         html = resp.get_data(as_text=True)

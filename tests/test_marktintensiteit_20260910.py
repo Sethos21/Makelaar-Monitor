@@ -69,7 +69,7 @@ def test_plaatsverdeling_marktintensiteit_echte_data() -> None:
     """2. Marktintensiteit in bouw_plaatsverdeling()/bouw_gemeenteverdeling()
     tegen de echte huidige 5-plaatsenselectie (scan_id 7): totalen moeten
     intern consistent optellen, nulgebieden blijven zichtbaar."""
-    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
     check("scan_id 7 actief voor deze test (118 objecten)", r["scaninfo"]["scan_id"] == 7 and r["kpis"]["aantal_objecten"] == 118)
 
@@ -117,7 +117,7 @@ def test_gemeente_marktintensiteit_gebruikt_alleen_geselecteerde_inwoners() -> N
     ("Verdeling per plaats/gemeente") mag het volledige officiële
     inwonertal wél als context blijven tonen - dat is een ANDER veld
     (`inwoners_weergave`) en wordt hier expliciet ongewijzigd gecontroleerd."""
-    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
     gv = r["gemeenteverdeling"]
 
@@ -152,7 +152,7 @@ def test_gemeente_marktintensiteit_gebruikt_alleen_geselecteerde_inwoners() -> N
     # Live route-check: de daadwerkelijk gerenderde HTML van de Marktintensiteit-sectie.
     appmod.app.testing = True
     client = appmod.app.test_client()
-    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles"), ("geo_niveau", "gemeente")]
+    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles"), ("geo_niveau", "gemeente"), ("scan_id", "7")]
     resp = client.get("/analyse", query_string=qs)
     html = resp.get_data(as_text=True)
     marktintensiteit_html = html[html.find("Marktintensiteit</strong>"):]
@@ -172,7 +172,7 @@ def test_enkele_plaats_selectie_evenredig() -> None:
     """3. Filters: bij een selectie van precies 1 plaats is die plaats per
     definitie 100% van zowel aanbod als (bekende) inwoners -> index moet
     exact 100.0 zijn, ongeacht het daadwerkelijke aanbod."""
-    args = maak_args(plaats=["Nistelrode"], status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=["Nistelrode"], status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
     pv = r["plaatsverdeling"]
     check("precies 1 plaats in de verdeling", len(pv) == 1, f"({[p['plaats'] for p in pv]})")
@@ -187,7 +187,7 @@ def test_makelaarsprofiel_context_geen_invloed_op_marktaandeel() -> None:
     plaats/gemeente - marktaandeel_pct blijft exact objecten_makelaar/
     totaal_markt*100, ongeacht de context. Kordaat Makelaars/Nistelrode als
     concreet voorbeeld (7 objecten, markt Nistelrode = 26)."""
-    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
     profiel = appmod.bouw_makelaar_profiel_woningen(
         "Kordaat Makelaars", r["ruwe_rijen"], r["plaatsverdeling"], r["gemeenteverdeling"],
@@ -218,7 +218,7 @@ def test_makelaarsprofiel_route_bevat_marktintensiteit_kolommen() -> None:
     nieuwe context-kolommen zonder crash, met de juiste waarden voor Kordaat."""
     appmod.app.testing = True
     client = appmod.app.test_client()
-    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles")]
+    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles"), ("scan_id", "7")]
     resp = client.get("/makelaar/woningen/" + quote("Kordaat Makelaars"), query_string=qs)
     check("makelaarsprofiel-route geeft 200 OK", resp.status_code == 200, f"(status={resp.status_code})")
     html = resp.get_data(as_text=True)
@@ -234,7 +234,7 @@ def test_resultaatpagina_marktintensiteit_sectie() -> None:
     onder Verdeling per plaats/gemeente, zonder de bestaande tabel te breken."""
     appmod.app.testing = True
     client = appmod.app.test_client()
-    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles")]
+    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles"), ("scan_id", "7")]
     resp = client.get("/analyse", query_string=qs)
     check("analysepagina geeft 200 OK", resp.status_code == 200, f"(status={resp.status_code})")
     html = resp.get_data(as_text=True)
@@ -248,7 +248,7 @@ def test_funda_link_hernieuwd_onderzoek_geen_wijziging() -> None:
     """5. Funda-link: hernieuwd onderzoek via de woningdetailpagina bevestigt
     dat er geen betrouwbare bron is (zie docs/BUGLIST.md) - bepaal_funda_makelaar_link()
     blijft ongewijzigd altijd None, geen knop, geen gok, geen schemawijziging."""
-    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"])
+    args = maak_args(plaats=PLAATSEN, status=list(appmod.STATUSSEN), bouwcategorie=["Alles"], scan_id="7")
     r = appmod.bouw_analyseresultaat(args)
     for naam in ["Kordaat Makelaars", "Heuvel Makelaars", "Volledig Fictieve Naam XYZ"]:
         link = appmod.bepaal_funda_makelaar_link(naam, r["ruwe_rijen"])
@@ -256,7 +256,7 @@ def test_funda_link_hernieuwd_onderzoek_geen_wijziging() -> None:
 
     appmod.app.testing = True
     client = appmod.app.test_client()
-    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles")]
+    qs = [("plaats", p) for p in PLAATSEN] + [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles"), ("scan_id", "7")]
     resp = client.get("/makelaar/woningen/" + quote("Kordaat Makelaars"), query_string=qs)
     html = resp.get_data(as_text=True)
     check("profielpagina toont nog steeds GEEN 'Bekijk aanbod op Funda'-knop", "Bekijk aanbod op Funda" not in html)

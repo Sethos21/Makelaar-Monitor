@@ -1,8 +1,237 @@
 # Makelaar Monitor — status
 
-_Laatst bijgewerkt: 2026-09-10_
+_Laatst bijgewerkt: 2026-09-28_
 
-# Correctieronde 2026-09-10: Marktintensiteit per gemeente - noemer beperkt tot geselecteerde inwoners (meest recent - lees dit eerst)
+**2026-09-28 - Milestone:** AI Analyse Export (Woningen + Funda Business) en correctie gemiddelde vraagprijs handmatig gecontroleerd en goedgekeurd; vastgelegd in commit `feat: add AI analysis export for housing and business` en gepusht naar origin/main. Tests: regressie 95, business-regressie 18, stabilisatie 41, marktintensiteit 66, AI-export Woningen 97, AI-export Business 289 = 606 checks groen. Buiten de commit gelaten (untracked): `AGENTS.md`, `docs/INSTALLATIE_NIEUWE_OMGEVING.md`, `start_server.bat`.
+
+# Ronde 2026-09-25 (3): AI-analyse-export uitgebreid naar Bedrijfsmatig (meest recent - lees dit eerst)
+
+Voortgezet op de ongewijzigde working tree. Woningen-export functioneel ongewijzigd (alle 97 checks groen). Geen commit/push, geen schema-/datawijziging.
+
+## Ontwerp
+- **Route** `GET /business/export/ai-json` (`business_export_ai_json()`) - zelfde `bouw_business_analyseresultaat()`-pipeline als `/business/analyse` en `/business/export/csv`. Bestandsnaam `makelaar_monitor_ai_export_bedrijfsmatig_scan<ID>_<YYYYMMDD_HHMM>.json`.
+- **Knop** "Export voor AI-analyse" in sectie 6 van `business_resultaat.html`.
+- **Scanconsistentie:** Business heeft geen peildatumselector en kiest altijd de nieuwste scan voor exact regio + categorieën. De knop geeft daarom `verwacht_scan_id` mee. Is er intussen een nieuwere scan, dan weigert de export met HTTP 409 en de melding "herlaad de analysepagina", zodat er nooit stilletjes een andere scan wordt geëxporteerd dan op het scherm staat.
+- **Gedeelde principes met Woningen:**
+  - `AI_EXPORT_SCHEMA_VERSIE`, `AI_EXPORT_ALGEMENE_METHODIEK` (tekst module-neutraal gemaakt: "vraagprijzen/-huren", "dezelfde scan en filters"), `_json_download_response()`, `_leeg_naar_none()`;
+  - dezelfde hoofdstructuur; `export_info.module` = `"woningen"` / `"bedrijfsmatig"`.
+- **Geen tweede rekenengine:**
+  - additieve ruwe velden in de bestaande Business-functies: `bereken_business_kpis`, `bouw_business_makelaarstabel`, `bereken_business_segmentanalyse`, `bouw_business_plaatsvergelijking`, `verrijk_business_rij`, `business_bouw_mutaties`, en `scaninfo.scanmoment/peildatum` + `vorige_scan_id/vorige_scanmoment` in de pipeline;
+  - uitsplitsingen per categorie/makelaar hergebruiken dezelfde centrale functies (`bereken_business_kpis/_huur_kpis/_koop_kpis`, `bouw_business_makelaarstabel`, `bouw_makelaar_lokale_marktpositie`) op een deelverzameling;
+  - nieuw toegevoegd, maar alleen ruw en niet op de pagina: gemiddelde/mediaan oppervlakte in `bereken_business_kpis()` en `koopprijs_per_m2_eur` per object (zelfde formule als de plaatsvergelijking).
+
+## JSON-hoofdstructuur Bedrijfsmatig
+```
+export_info    module "bedrijfsmatig", schema_versie, exportmoment, analysetype "actueel",
+               historische_analyse_beschikbaar false, scan{scan_id, scanmoment, peildatum, gebied,
+               plaatsen_in_scan, categorieen, aantal_objecten_volledige_scan},
+               selectie{plaatsen, categorieen, statussen, transactietype}, methodiek, waarschuwingen
+markt          aantal_objecten, per_categorie, koop{aanbod, met_prijs, zonder_prijs_notk, totale/gem./mediaan
+               koopprijs}, huur{aanbod, met_prijs, op_aanvraag, per_eenheid, huurprijs_per_m2_per_jaar,
+               berekende_jaarhuur}, koop_en_huur_met_prijs, oppervlakte{totaal/gem./mediaan}, makelaars,
+               dagen_in_monitor
+gebieden       { per_plaats[] }   (gemeente/provincie uit GEO_REFERENTIE, null als onbekend)
+makelaars[]    ALLE; marktaandeel, rang, koop/huur, m²(+dekking), koopwaarde, gem./mediaan koopprijs,
+               huur €/m²/jaar, berekende jaarhuur, segmentposities[] (per categorie), lokale_posities[] (per plaats)
+segmenten      { per_categorie[] (Kantoor/Bedrijfsruimte, incl. makelaarsverdeling),
+                 grootteklassen_bedrijfsruimte[], funda_objecttypen[] }
+marktdynamiek  vergelijking_beschikbaar + reden; indien beschikbaar: vorige_scan, scope "volledige_scan",
+               volledige_scan{vorige/huidige/netto, mutaties_per_type}, mutaties[]
+objecten[]     bron: object_id, funda_url, adres, plaats, gezochte_categorieen, funda_objecttype, status,
+               koopprijs_eur, koopprijs_conditie, huurprijs_eur, huurprijs_eenheid, oppervlakte_m2,
+               oppervlakte_extra_m2, makelaar, peildatum, waarschuwing
+               berekend: berekend_jaarhuur_eur, berekend_maandhuur_eur, berekend_koopprijs_per_m2_eur,
+               is_koopaanbod, is_huuraanbod, is_koop_en_huur_met_prijs, gemeente, eerste/laatste_waarneming,
+               dagen_in_monitor
+methodologie[], field_definitions (incl. veldherkomst bron vs. berekend), suggested_ai_task (Business)
+```
+**Afwijkingen:**
+- `gebieden` heeft voor Business alleen `per_plaats`: er is geen gemeenteverdeling en geen marktintensiteit, want die is voor Business bewust niet gebouwd (BUGLIST).
+- Marktdynamiek vergelijkt, net als de Business-analysepagina, de volledige ongefilterde scans (`scope: "volledige_scan"`), niet de gefilterde selectie.
+- Huurprijzen staan in de vermelde eenheid en worden niet omgerekend.
+
+## Controle-exports (echte data, `output/ai_export_test/`, buiten Git)
+| | Woningen | Bedrijfsmatig |
+|---|---|---|
+| Bestand | `makelaar_monitor_ai_export_woningen_scan10_20260925_1632.json` | `makelaar_monitor_ai_export_bedrijfsmatig_scan7_20260925_1632.json` |
+| Grootte | 133.295 bytes | 218.156 bytes |
+| Scan | 10 (2026-09-11 10:56, Uden) | Business scan 7 (2026-09-10 16:43, Heesch \| Oss \| Uden \| Veghel, Bedrijfsruimte \| Kantoor) - nieuwste Business-scan |
+| Filters | Beschikbaar + Bestaande bouw | Kantoor + Bedrijfsruimte, status Beschikbaar, transactietype Alles |
+| Objecten / makelaars | 106 / 22 | 142 / 32 |
+| Marktdynamiek | niet beschikbaar (eerste nieuwe meetreeks) | niet beschikbaar (enige scan van deze reeks; Uden-reeks heeft wel een vergelijking 3→5) |
+
+**Business-veld-dekking (niet-null van 142):** koopprijs 29, koopconditie 29, huurprijs 86, huureenheid 116 (incl. 30 op aanvraag), oppervlakte 140, extra oppervlakte 3, berekende jaarhuur 34, koopprijs/m² 27, makelaar 142, gemeente 81 (Oss, 61 objecten, staat niet in `GEO_REFERENTIE`), waarschuwing 5.
+
+**Gewenst, maar niet beschikbaar in de huidige Business-scanner/-data:**
+- **Status:** alleen de standaardlijst wordt gelezen, dus altijd "Beschikbaar". Onder bod/verhuurd/verkocht wordt niet gemeten.
+- **Gemeente Oss:** ontbreekt in de geo-referentie (niet geraden).
+- **Huur per m² bij maand- en jaarhuur:** niet omgerekend; berekende jaarhuur alleen bij per m²/jaar.
+- **Detailpaginavelden:** bouwjaar, energielabel, servicekosten, btw-status huur, perceel, geocoördinaten.
+- **Makelaar:** geen kantoor-ID of profiel-URL.
+- **Historische Business-analyse:** geen peildatumselector.
+
+## Tests (alle suites)
+| Suite | Resultaat |
+|---|---|
+| `test_regressie.py` | 95/95 ✓ |
+| `test_business_regressie.py` | 18/18 ✓ |
+| `test_stabilisatie_20260909.py` | 41/41 ✓ |
+| `test_marktintensiteit_20260910.py` | 66/66 ✓ |
+| `test_ai_export_20260925.py` (Woningen) | 97/97 ✓ |
+| `test_business_ai_export_20260925.py` **(nieuw)** | 289/289 ✓ |
+
+De Business-test draait over alle 4 bestaande Business-scanreeksen, zonder hardgecodeerde aantallen: de export wordt vergeleken met de pipeline en met directe SQL-tellingen. Gedekt:
+- JSON, module en structuur; geen woningvelden;
+- selectie/filters (Huur/Koop/Koop + Huur/status/categorie);
+- totalen tegen Analyse en SQL; koop/huur-partities; per-eenheid tegen SQL;
+- numeriek; herkomst bron vs. berekend (elk objectveld geclassificeerd); berekende jaarhuur = huurprijs × m² alleen bij per_m2_per_jaar; maandhuur nooit omgerekend;
+- null-tellingen gelijk aan de database; segmenten gelijk aan Analyse;
+- Top 5 (32 makelaars, 27 verborgen rijen);
+- marktdynamiek met en zonder vorige scan; `verwacht_scan_id` 200/409; Woningen-export ongewijzigd;
+- databases ongewijzigd.
+
+## Database
+Beide SQLite-bestanden: SHA-256 en grootte vóór/na identiek. Geen schemawijziging.
+
+## Aanbevolen volgende stap
+Handmatige controle van beide exports (knoppen + de twee bestanden in `output/ai_export_test/`). Eventueel later: Oss (en andere Business-plaatsen) aan `GEO_REFERENTIE` toevoegen; historische Business-analyse; scan-kwaliteitscontrole (scan 8, zie BUGLIST).
+
+---
+
+# Stabilisatieronde 2026-09-25 (na AI-export, vóór handmatige controle)
+
+Voortgezet op de ongewijzigde working tree van de AI-export-ronde hieronder. Geen commit/push, geen schema-/datawijziging.
+
+## 1. Gemiddelde vraagprijs gecorrigeerd (één centrale berekening)
+- **Fout:** `bereken_kpis()` berekende `totale bekende vraagwaarde / alle objecten`, dus objecten zonder vraagprijs telden als €0 mee.
+- **Fix (`app.py`):**
+  - nieuwe centrale functies `geldige_vraagprijzen(rijen)` (bekend en > 0) en `bereken_gemiddelde_vraagprijs(rijen)` (som / aantal geldige prijzen, `None` als er geen enkele is);
+  - `bereken_kpis()` gebruikt die voor zowel de weergave (`gemiddelde_vraagprijs`, nu "-" i.p.v. "€ 0" zonder bekende prijs) als het ruwe `gemiddelde_vraagprijs_eur`;
+  - `aantal_met_vraagprijs` is nu exact de noemer.
+- **Consumenten:** Analyse-KPI en AI-export lezen dezelfde waarde uit `bereken_kpis()`. De andere gemiddelden (makelaarstabel, plaats-/gemeenteverdeling, segmenten, makelaarsprofiel, dashboard) deelden al door het aantal bekende prijzen en zijn niet gewijzigd.
+- **Niet gewijzigd:** mediaan en andere KPI's. De mediaan gebruikte al alleen bekende prijzen; in de database komen geen prijzen ≤ 0 voor.
+- **Effect:**
+  - scan 7, alle statussen/Alles: € 605.310 → **€ 621.101** (115 van 118 objecten);
+  - scan 10 Uden, standaardfilters: € 614.170 → **€ 620.019** (105 van 106 objecten).
+- **Regressietest:** `test_gemiddelde_vraagprijs_zonder_prijs()` in `tests/test_regressie.py`. Synthetisch: 2 prijzen + 2 zonder prijs geeft 500.000 (niet 250.000); zonder bekende prijs "-"/None. Plus scan 7 op echte data.
+
+## 2. Verouderde tests hersteld (alleen `scan_id=7` gepind, geen verwachtingen versoepeld)
+- `test_stabilisatie_20260909.py` en `test_marktintensiteit_20260910.py`: alle 5-plaatsen- en Nistelrode-selecties (functieaanroepen + route-querystrings) krijgen expliciet `scan_id=7`. Eén checklabel hernoemd van "actuele scan…" naar "scan_id 7 … geladen" (verwachting zelf ongewijzigd: 118 objecten).
+- `test_regressie.py`:
+  - route-sweep, de 4 DEEL L-filtercombinaties en B2-makelaarsprofielen gepind op scan 7 (B2 gebruikt nu de makelaars van scan 7 i.p.v. die van de nieuwste scan, een ander gebied);
+  - nieuwe check dat elke sluitcontrole-selectie niet leeg is (was eerder ongemerkt 0 objecten);
+  - `/export/ai-json` toegevoegd aan de route-sweep;
+  - G10 (naamvarianten in de nieuwste scan) bewust ongewijzigd.
+- `test_ai_export_20260925.py`: extra checks dat de gemiddelde vraagprijs in export en Analyse gelijk is, voor scan 7 én de actuele scan met standaardfilters.
+
+## 3. Scan 8 → 9: ongewijzigd
+Geen productiecode of historische data aangepast. BUGLIST-punt blijft staan (scan 8 lijkt onvolledig voor Nistelrode, dus 8→9 toont een fictieve +26).
+
+## 4. Testresultaten (alle suites)
+| Suite | Resultaat |
+|---|---|
+| `tests/test_regressie.py` | 95/95 ✓ (DEEL L: 67/94/91/118 objecten, alle sluitend) |
+| `tests/test_business_regressie.py` | 18/18 ✓ |
+| `tests/test_stabilisatie_20260909.py` | 41/41 ✓ |
+| `tests/test_marktintensiteit_20260910.py` | 66/66 ✓ |
+| `tests/test_ai_export_20260925.py` | 97/97 ✓ |
+
+## 5. Echte AI-export voor handmatige controle
+- **Pad:** `output/ai_export_test/makelaar_monitor_ai_export_woningen_scan10_20260925_1619.json`. Staat in `output/`, dus buiten Git.
+- **Omvang:** 133.318 bytes.
+- **Inhoud:** scan 10 (Uden, actueel), standaardfilters Beschikbaar + Bestaande bouw. 106 objecten, waarvan 105 met vraagprijs. Gemiddelde € 620.019 (gelijk aan Analyse), mediaan € 525.000, totaal € 65.102.000, 22 makelaars. Marktdynamiek: geen vergelijking (eerste scan van de nieuwe meetreeks voor Uden; oudere Uden-scans vallen vóór de methodiekgrens).
+
+## 6. Database
+Beide SQLite-bestanden: SHA-256 en grootte vóór/na identiek (read-only). Geen schemawijziging.
+
+## Gewijzigde bestanden deze ronde
+`app.py` (centrale gemiddelde-vraagprijsfunctie + `bereken_kpis()`), `tests/test_regressie.py`, `tests/test_stabilisatie_20260909.py`, `tests/test_marktintensiteit_20260910.py`, `tests/test_ai_export_20260925.py`, `docs/CLAUDE_STATUS.md`, `docs/BUGLIST.md`.
+
+## Aanbevolen volgende stap
+Handmatige controle van de AI-export (knop op de analysepagina, actueel + historisch, en het gegenereerde testbestand). Daarna apart beslissen over scan-kwaliteitscontrole (scan 8) en een eventuele Business-variant.
+
+---
+
+# Ronde 2026-09-25: AI-analyse-export (Woningen)
+
+Uitgangspunt: HEAD `50eb0d9` (schone working tree op 3 niet-getrackte overdrachtsbestanden na). Geen commit/push, geen schemawijziging, geen productiedata gewijzigd (DB-bestand grootte+mtime vóór/na identiek, expliciet getest).
+
+**Opdracht:** knop "Export voor AI-analyse" bij Woningen die één zelfstandig UTF-8 JSON-bestand levert met exact de actieve analysecontext (scan/peildatum, plaatsen, status, bouwcategorie, actueel/historisch), bedoeld om handmatig aan ChatGPT te geven. Geen externe API, geen tweede rekenengine.
+
+## Ontwerp
+- **Route** `GET /export/ai-json` (`export_ai_json()` in `app.py`) - zelfde `bouw_analyseresultaat(request.args)`-pipeline als `/analyse` en `/export/csv`. Bestandsnaam `makelaar_monitor_ai_export_woningen_scan<ID>_<YYYYMMDD_HHMM>.json`.
+- **Knop** in sectie "6. Export" van `resultaat.html`, naast de CSV-knop. De knop geeft `scan_id` altijd expliciet mee (ook bij de actuele analyse), zodat een tussentijds binnengekomen nieuwe scan de export nooit stilletjes verandert.
+- **Geen tweede rekenengine:** de bestaande functies (`bereken_kpis`, `bouw_makelaarstabel`, `bouw_plaatsverdeling`, `bouw_gemeenteverdeling`, `_bereken_marktintensiteit_velden`, `bereken_woning_segmentanalyse`, `verrijk_rij`, `woning_bouw_mutaties`, `bouw_makelaar_lokale_marktpositie`) kregen uitsluitend **additieve** ruwe numerieke velden (`*_eur`, `*_m2`, `inwoners`, `inwoners_selectie`, `verwacht_aanbod`, `ranking` e.d.) naast de bestaande `*_weergave`-strings. Bestaande velden/weergave ongewijzigd. `bouw_analyseresultaat()` geeft nu ook `vorige_scan_id`/`vorige_scanmoment` (ruw) terug. `bouw_woningen_ai_export()` herstructureert alleen - geen eigen formules (enige extra: een simpele telling per bouwcategorie en `rang_in_selectie` met dezelfde gelijke-rang-regel als de lokale ranking).
+- **Business later:** generieke delen zijn module-onafhankelijk: `AI_EXPORT_SCHEMA_VERSIE`, `AI_EXPORT_SUGGESTED_TASK`, `AI_EXPORT_ALGEMENE_METHODIEK`, `_json_download_response()`, `_leeg_naar_none()`. Een Business-variant = een `bouw_business_ai_export()` + route; geen refactor nodig.
+
+## Definitieve JSON-hoofdstructuur
+```
+export_info      bron, module, schema_versie, exportmoment, analysetype (actueel/historisch),
+                 scan{scan_id, scanmoment, peildatum, gebied, plaatsen_in_scan, aantal_objecten_volledige_scan,
+                      meest_recente_scan_id_in_database},
+                 selectie{plaatsen, statussen, bouwcategorieen},
+                 methodiek{woningen_methodiek_wijziging, scan_valt_onder_nieuwe_methodiek,
+                           eerste_scan_van_nieuwe_meetreeks, toelichting, bron_inwonertallen},
+                 waarschuwingen[]   (plaats buiten scangebied, pre-methodiek-scan, 0 objecten)
+markt            aantallen, totale/gem./mediaan vraagprijs, gem./mediaan €/m², woonoppervlakte, dekkingstellers,
+                 aantal_makelaars, zonder makelaar, per_status, per_bouwcategorie, dagen_in_monitor
+gebieden         { per_plaats[], per_gemeente[] }   (incl. is_nulgebied, marktintensiteit)
+makelaars[]      ALLE makelaars + rang_in_selectie + lokale_posities{per_plaats[], per_gemeente[]}
+prijssegmenten[] incl. numerieke ondergrens_eur/bovengrens_eur
+marktdynamiek    vergelijking_beschikbaar, reden_geen_vergelijking, vorige_scan
+                 (+ alleen indien vergelijkbaar: gefilterde_selectie, volledige_scan_referentie, mutaties[])
+objecten[]       object_id (=Funda-URL), funda_object_id, adres, plaats, gemeente, status, bouwcategorie,
+                 nieuwbouwreden, vraagprijs_eur, woonoppervlakte_m2, perceeloppervlakte_m2, prijs_per_m2_eur,
+                 slaapkamers, energielabel, makelaar, peildatum, eerste/laatste_waarneming, dagen_in_monitor,
+                 prijswijziging_sinds_eerste_waarneming_eur, waarschuwing
+methodologie[]   kernregels (marktaandeel, marktintensiteit, null≠0, methodiekgrens, gebiedsvergelijking)
+field_definitions  per sectie
+suggested_ai_task  letterlijk zoals gevraagd
+```
+**Afwijkingen t.o.v. het voorbeeld:** (1) `gebieden` is een object met `per_plaats`/`per_gemeente` i.p.v. één platte lijst (twee niveaus met verschillende inwonerbases); (2) extra sectie `methodologie` naast `field_definitions`; (3) `marktdynamiek` is altijd aanwezig, maar bevat bij `vergelijking_beschikbaar=false` uitsluitend de reden - geen cijfers; (4) Funda-scannermetadata (`resultaatpagina`, `toppositie`, `bron`, `gevonden_bij_scan`) bewust weggelaten - geen marktdata en makkelijk verkeerd te interpreteren; (5) op gemeenteniveau heet "aanbod per 1.000 inwoners" expliciet `aanbod_per_1000_inwoners_gemeente_officieel` (bestaande berekening op het volledige officiële inwonertal, alleen context), marktintensiteit gebruikt ongewijzigd `inwoners_selectie`.
+
+**Bewuste inhoudelijke keuze:** `markt.gemiddelde_vraagprijs_eur` wordt berekend over objecten MET een bekende vraagprijs. De Analyse-KPI "Gemiddelde vraagprijs" deelt de som door ALLE objecten (ook zonder prijs) en is daardoor te laag (scan 7, alle statussen/Alles: pagina € 605.310 vs. correct € 621.101; 3 van 118 objecten zonder vraagprijs). De Analyse-weergave is niet aangepast (buiten scope) - zie `docs/BUGLIST.md`. Alle andere cijfers zijn identiek aan de Analyse.
+
+## Tests
+Nieuw: `tests/test_ai_export_20260925.py` - **90/90 checks geslaagd**, gepind op scan_id 7. Dekt: JSON valide/UTF-8 zonder BOM/hoofdstructuur; methodologie-teksten; totalen vs. Analyse (aantal, totale vraagwaarde, mediaan, €/m², m², makelaars, status, segmenten); Top-5 UI beperkt export niet (27 makelaars = 5 + 22 verborgen rijen); knop aanwezig + geeft scan_id door; geen €-strings/alle numerieke velden numeriek; null-tellingen == DB (vraagprijs 3, energielabel 5, slaapkamers 5, perceel 14 - niets verzonnen); filters (Beschikbaar+Bestaande bouw == directe SQL-telling; Nistelrode-only 26, Kordaat #1 7/26,9%); lokale positie Kordaat/Nistelrode; marktintensiteit-scope (Bernheze 31.240/108,9, 's-Hertogenbosch 2.795/verwacht 9,7, plaatsindices 162,1/81,4/111,5/39,6/0,0); nulgebied Vinkel; historisch scan 6 (vergelijkt alleen met oude scan 5, 39→37, 2× Uit aanbod) + scan 7 (geen vergelijking met 6); alle 10 scans: nooit vergelijking over de methodiekgrens; gesimuleerd vangnet; actuele export; waarschuwing plaats buiten scangebied; DB ongewijzigd.
+
+Bestaande suites (vóór/na-vergelijking via tijdelijke `git stash`, resultaat identiek):
+- `test_regressie.py` 78/78, `test_business_regressie.py` 18/18 - geslaagd.
+- `test_marktintensiteit_20260910.py` (28 OK / 13 FAIL + crash) en `test_stabilisatie_20260909.py` (29 OK / 7 FAIL): **al vóór deze ronde falend, exact dezelfde failures vóór en na.** Oorzaak: deze tests nemen "de actuele scan" als scan_id 7, maar sinds de gebruiker scans 8/9/10 draaide is scan 10 (Uden) de nieuwste - de selectie Heesch e.a. levert zonder `scan_id` dan 0 objecten. Test-kalibratie, geen applicatiebug. Ook `test_regressie.py` slaagt deels "leeg" (0 objecten). Niet aangepast (buiten scope) - zie BUGLIST.
+
+## Echte export (bestandsgrootte)
+- Actueel (scan 10, Uden, standaardfilters Beschikbaar + Bestaande bouw): **133.318 bytes** (~130 KB), 106 objecten, 22 makelaars.
+- Actueel (scan 10, Uden, alle statussen/Alles): 217.725 bytes (~213 KB), 192 objecten, 27 makelaars.
+- Scan 7 (5 plaatsen, alle statussen/Alles): ~158 KB, 118 objecten, 27 makelaars.
+
+## Controle tweede post-methodiek-scan (alleen controle, niets gewijzigd)
+| scan_id | scanmoment | gebied | objecten | vorige volgens `haal_vorige_scan_id()` |
+|---|---|---|---|---|
+| 7 | 2026-09-09 10:09:54 | Heesch \| Heeswijk-Dinther \| Nistelrode \| Vinkel \| Vorstenbosch | 118 | geen (eerste nieuwe meetreeks) |
+| 8 | 2026-09-10 16:07:02 | Heesch \| Heeswijk-Dinther \| Nistelrode \| Vorstenbosch | 94 | geen (nieuw gebied, zonder Vinkel) |
+| 9 | 2026-09-10 16:34:06 | idem als 8 | 120 | **8** |
+| 10 | 2026-09-11 10:56:37 | Uden | 192 | geen (oudere Uden-scans zijn pre-methodiek) |
+
+- **Ja, er bestaat een tweede vergelijkbare post-methodiek-scan:** scan 9 wordt door de bestaande marktdynamiek methodologisch als vergelijkbaar met scan 8 beschouwd (zelfde gebied, beide na de grens). Dit bevestigt het methodiekbreuk-mechanisme met echte data (BUGLIST-punt "nog niet bevestigd met een echte 2e scan" is daarmee afgedekt).
+- Scan 7 is NIET vergelijkbaar met 8/9: ander gebied (met Vinkel) - exact-gebied-regel.
+- **Inhoudelijke kanttekening:** 9 vs 8 = +26 netto, en alle 26 "Nieuw aanbod" zitten in Nistelrode (scan 8: 2 Nistelrode-objecten, scan 9: 28; ~26 is Funda's werkelijke Nistelrode-aanbod). Binnen 27 minuten is dat vrijwel zeker **een onvolledige Nistelrode-dekking in scan 8**, geen echte marktbeweging. De code beschouwt het terecht als methodologisch vergelijkbaar, maar de marktdynamiek 8→9 (en een AI-export van scan 9) toont hierdoor een fictieve aanbodstijging. Niets aangepast - zie BUGLIST voor opties.
+
+## Gewijzigde/nieuwe bestanden
+- `app.py` - additieve ruwe velden in bestaande functies, `vorige_scan_id`/`vorige_scanmoment`, AI-exportconstanten/-helpers, `bouw_woningen_ai_export()`, route `/export/ai-json`.
+- `web/templates/resultaat.html` - knop "Export voor AI-analyse" + toelichtende zin in sectie 6.
+- `tests/test_ai_export_20260925.py` **(nieuw)**.
+- `docs/CLAUDE_STATUS.md`, `docs/BUGLIST.md`.
+
+## Bekende beperkingen / aanbevolen volgende stap
+1. Handmatige controle: knop op de analysepagina (actueel + historisch via peildatumselector), bestand openen, aan ChatGPT geven.
+2. Beslissen over de Analyse-KPI "Gemiddelde vraagprijs" (deelt door alle objecten) - kleine fix in `bereken_kpis()`.
+3. De twee verouderde testsuites pinnen op `scan_id=7`.
+4. Scan 8 (onvolledige Nistelrode-dekking) - beslissen of dit zichtbaar moet worden gemarkeerd (bv. een plausibiliteitswaarschuwing bij grote per-plaats-sprongen) of dat een nieuwe scan volstaat.
+5. Eventueel later: Business-variant van de AI-export.
+
+---
+
+# Correctieronde 2026-09-10: Marktintensiteit per gemeente - noemer beperkt tot geselecteerde inwoners
 
 **Opdracht:** de gemelde 592,6-index (Bernheze) in Marktintensiteit → Per gemeente was nog niet gecorrigeerd. Gevraagd: de inwonersnoemer voor de Marktintensiteitsberekening mag uitsluitend bestaan uit de daadwerkelijk geselecteerde plaatsen (niet het volledige officiële gemeentelijke inwonertal), zodat teller en noemer exact dezelfde geografische scope hebben. De bovenste tabel ("Verdeling per plaats/gemeente") moet het volledige officiële inwonertal wél als context blijven tonen.
 

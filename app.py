@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 import re
 import sqlite3
@@ -371,10 +372,16 @@ def verrijk_rij(rij: dict, geschiedenis: dict[str, dict]) -> dict:
     vraagprijs = rij.get("vraagprijs")
     woonoppervlakte = rij.get("woonoppervlakte")
 
+    # *_eur-velden: dezelfde afgeleide waarden, maar ruw numeriek (of None) -
+    # uitsluitend voor machineleesbare exports (AI-export); de weergave
+    # hieronder blijft ongewijzigd.
     if vraagprijs and woonoppervlakte and vraagprijs > 0 and woonoppervlakte > 0:
-        rij["prijs_per_m2"] = formatteer_bedrag(round(vraagprijs / woonoppervlakte)) + " /m²"
+        rij["prijs_per_m2_eur"] = round(vraagprijs / woonoppervlakte)
+        rij["prijs_per_m2"] = formatteer_bedrag(rij["prijs_per_m2_eur"]) + " /m²"
     else:
+        rij["prijs_per_m2_eur"] = None
         rij["prijs_per_m2"] = "-"
+    rij["prijswijziging_eur"] = None
 
     info = geschiedenis.get(rij.get("funda_url"))
     eerste_datum = info.get("eerste_datum") if info else None
@@ -391,6 +398,7 @@ def verrijk_rij(rij: dict, geschiedenis: dict[str, dict]) -> dict:
 
         eerste_prijs = info.get("eerste_prijs")
         if eerste_prijs is not None and vraagprijs is not None:
+            rij["prijswijziging_eur"] = vraagprijs - eerste_prijs
             rij["prijswijziging"] = formatteer_prijswijziging(vraagprijs - eerste_prijs)
         else:
             rij["prijswijziging"] = "-"
@@ -413,6 +421,20 @@ def verrijk_rij(rij: dict, geschiedenis: dict[str, dict]) -> dict:
     return rij
 
 
+def geldige_vraagprijzen(rijen: list[dict]) -> list:
+    """Bekende, geldige (positieve) vraagprijzen - objecten zonder vraagprijs
+    (bv. 'prijs op aanvraag') tellen nooit als 0 mee."""
+    return [r["vraagprijs"] for r in rijen if r.get("vraagprijs") is not None and r["vraagprijs"] > 0]
+
+
+def bereken_gemiddelde_vraagprijs(rijen: list[dict]) -> int | None:
+    """Centrale berekening van de gemiddelde vraagprijs (Analyse-KPI en
+    AI-export): som bekende vraagprijzen / aantal objecten MET een bekende
+    geldige vraagprijs. None als er geen enkele bekende prijs is."""
+    prijzen = geldige_vraagprijzen(rijen)
+    return round(sum(prijzen) / len(prijzen)) if prijzen else None
+
+
 def bereken_kpis(rijen: list[dict]) -> dict:
     """Verwacht ruwe (nog niet opgemaakte) rijen, dus vóór verrijk_rij().
     Status-subtellingen zijn binnen de HUIDIGE selectie: als de gebruiker al
@@ -420,7 +442,9 @@ def bereken_kpis(rijen: list[dict]) -> dict:
     als de Business-KPI's (geen apart 'ongefilterd totaal' erbij verzinnen)."""
     aantal = len(rijen)
     totaal = sum(r.get("vraagprijs") or 0 for r in rijen)
-    gemiddeld = round(totaal / aantal) if aantal else 0
+    # Noemer = objecten met een bekende geldige vraagprijs, NIET alle objecten
+    # (bugfix 2026-09-25, zie docs/BUGLIST.md).
+    gemiddeld = bereken_gemiddelde_vraagprijs(rijen)
     # "Onbekend" telt nooit als makelaar (zie "Onbekend is geen makelaar");
     # objecten zonder herkende makelaar tellen wel gewoon mee in aantal/noemer.
     makelaars = {(r.get("makelaar") or "").strip() for r in rijen if (r.get("makelaar") or "").strip()}
@@ -449,7 +473,7 @@ def bereken_kpis(rijen: list[dict]) -> dict:
     return {
         "aantal_objecten": aantal,
         "totale_vraagprijs": formatteer_bedrag(totaal),
-        "gemiddelde_vraagprijs": formatteer_bedrag(gemiddeld),
+        "gemiddelde_vraagprijs": formatteer_bedrag(gemiddeld) if gemiddeld is not None else "-",
         "aantal_makelaars": len(makelaars),
         "aantal_zonder_makelaar": zonder_makelaar,
         "beschikbaar": per_status["Beschikbaar"],
@@ -459,6 +483,18 @@ def bereken_kpis(rijen: list[dict]) -> dict:
         "gemiddelde_m2": (formatteer_bedrag(gemiddelde_m2) + " /m²") if gemiddelde_m2 is not None else "-",
         "mediaan_m2": (formatteer_bedrag(mediaan_m2) + " /m²") if mediaan_m2 is not None else "-",
         "totaal_woonoppervlakte": (f"{totaal_oppervlakte:,.0f}".replace(",", ".") + " m²") if totaal_oppervlakte else "-",
+        # Ruwe numerieke tegenhangers (None = onbekend, nooit 0-als-gok) voor
+        # machineleesbare exports. Gemiddelde vraagprijs: dezelfde centrale
+        # berekening als de weergave hierboven.
+        "totale_vraagwaarde_eur": sum(prijzen) if prijzen else None,
+        "gemiddelde_vraagprijs_eur": gemiddeld,
+        "mediaan_vraagprijs_eur": mediaan_vraagprijs,
+        "gemiddelde_prijs_per_m2_eur": gemiddelde_m2,
+        "mediaan_prijs_per_m2_eur": mediaan_m2,
+        "totaal_woonoppervlakte_m2": totaal_oppervlakte,
+        "aantal_met_vraagprijs": len(geldige_vraagprijzen(rijen)),  # noemer van gemiddelde_vraagprijs
+        "aantal_met_woonoppervlakte": len(oppervlaktes),
+        "aantal_met_prijs_per_m2": len(prijzen_m2),
     }
 
 
@@ -473,6 +509,7 @@ def bouw_makelaarstabel(rijen: list[dict]) -> list[dict]:
         naam = (r.get("makelaar") or "").strip() or "Onbekend"
         entry = per_makelaar.setdefault(naam, {
             "makelaar": naam, "aantal": 0, "prijzen": [], "prijzen_m2": [], "oppervlakte": 0.0,
+            "aantal_met_oppervlakte": 0,
         })
         entry["aantal"] += 1
         if r.get("vraagprijs") is not None:
@@ -481,6 +518,7 @@ def bouw_makelaarstabel(rijen: list[dict]) -> list[dict]:
             entry["prijzen_m2"].append(r["vraagprijs"] / r["woonoppervlakte"])
         if r.get("woonoppervlakte") is not None:
             entry["oppervlakte"] += r["woonoppervlakte"]
+            entry["aantal_met_oppervlakte"] += 1
 
     tabel = []
     for entry in per_makelaar.values():
@@ -498,6 +536,14 @@ def bouw_makelaarstabel(rijen: list[dict]) -> list[dict]:
             "mediaan_vraagprijs_weergave": formatteer_bedrag(mediaan_vraagprijs) if mediaan_vraagprijs is not None else "-",
             "gemiddelde_m2_weergave": (formatteer_bedrag(gemiddelde_m2) + " /m²") if gemiddelde_m2 is not None else "-",
             "oppervlakte_weergave": (f"{entry['oppervlakte']:,.0f}".replace(",", ".") + " m²") if entry["oppervlakte"] else "-",
+            # Ruwe numerieke tegenhangers (None = onbekend) voor exports.
+            "totale_vraagwaarde_eur": totale_vraagwaarde,
+            "gemiddelde_vraagprijs_eur": gemiddelde_vraagprijs,
+            "mediaan_vraagprijs_eur": mediaan_vraagprijs,
+            "gemiddelde_prijs_per_m2_eur": gemiddelde_m2,
+            "woonoppervlakte_m2": entry["oppervlakte"] if entry["aantal_met_oppervlakte"] else None,
+            "aantal_met_vraagprijs": len(entry["prijzen"]),
+            "aantal_met_woonoppervlakte": entry["aantal_met_oppervlakte"],
         })
 
     # Marktleider bovenaan: standaard aflopend op Objecten (== aflopend op
@@ -534,6 +580,7 @@ def _bereken_marktintensiteit_velden(
             "aandeel_inwoners_pct": None,
             "verschil_pp": None,
             "verwacht_aanbod_weergave": "-",
+            "verwacht_aanbod": None,
             "marktintensiteitsindex": None,
         }
 
@@ -541,6 +588,7 @@ def _bereken_marktintensiteit_velden(
     verwacht_aanbod = totaal_aanbod * (inwoners / totaal_inwoners_bekend)
     marktintensiteitsindex = round(aantal / verwacht_aanbod * 100, 1) if verwacht_aanbod else None
     return {
+        "verwacht_aanbod": round(verwacht_aanbod, 1),
         "aandeel_aanbod_pct": aandeel_aanbod_pct,
         "aandeel_inwoners_pct": aandeel_inwoners_pct,
         "verschil_pp": (
@@ -620,6 +668,14 @@ def bouw_plaatsverdeling(rijen: list[dict], alle_plaatsen: list[str] | None = No
             # hieronder). Zelfde veldnaam als daar, zodat de Marktintensiteit-
             # tabel in de template dit veld op beide niveaus kan gebruiken.
             "inwoners_selectie_weergave": f"{inwoners:,}".replace(",", ".") if inwoners else "-",
+            # Ruwe numerieke tegenhangers (None = onbekend) voor exports.
+            "provincie": info.get("provincie"),
+            "inwoners": inwoners,
+            "inwoners_peildatum": info.get("peildatum_plaats"),
+            "aanbod_per_1000_inwoners": aanbod_per_1000,
+            "totale_vraagwaarde_eur": totale_vraagwaarde,
+            "gemiddelde_vraagprijs_eur": gemiddelde_vraagprijs,
+            "gemiddelde_prijs_per_m2_eur": gemiddelde_m2,
         }
         rij.update(_bereken_marktintensiteit_velden(inwoners, entry["aantal"], totaal_aanbod, totaal_inwoners_bekend))
         tabel.append(rij)
@@ -732,6 +788,16 @@ def bouw_gemeenteverdeling(rijen: list[dict], alle_plaatsen: list[str] | None = 
             "inwoners_weergave": f"{inwoners:,}".replace(",", ".") if inwoners else "-",
             "aanbod_per_1000_weergave": (f"{aanbod_per_1000}".replace(".", ",")) if aanbod_per_1000 is not None else "-",
             "inwoners_selectie_weergave": f"{inwoners_selectie:,}".replace(",", ".") if inwoners_selectie else "-",
+            # Ruwe numerieke tegenhangers (None = onbekend) voor exports.
+            # inwoners_gemeente = officieel totaal (alleen context/"per 1.000
+            # inw."); inwoners_selectie = de enige Marktintensiteit-noemer.
+            "inwoners_gemeente": inwoners,
+            "inwoners_selectie": inwoners_selectie,
+            "plaatsen_in_selectie": sorted(entry["plaatsen_in_selectie"]),
+            "aanbod_per_1000_inwoners": aanbod_per_1000,
+            "totale_vraagwaarde_eur": totale_vraagwaarde,
+            "gemiddelde_vraagprijs_eur": gemiddelde_vraagprijs,
+            "gemiddelde_prijs_per_m2_eur": gemiddelde_m2,
         }
         rij.update(_bereken_marktintensiteit_velden(inwoners_selectie, entry["aantal"], totaal_aanbod, totaal_inwoners_bekend))
         tabel.append(rij)
@@ -793,6 +859,11 @@ def bereken_woning_segmentanalyse(
             "mediaan_vraagprijs": formatteer_bedrag(med) if med is not None else "-",
             "gemiddelde_m2": (formatteer_bedrag(gem_m2) + " /m²") if gem_m2 is not None else "-",
             "mediaan_m2": (formatteer_bedrag(med_m2) + " /m²") if med_m2 is not None else "-",
+            # Ruwe numerieke tegenhangers (None = onbekend) voor exports.
+            "gemiddelde_vraagprijs_eur": gem,
+            "mediaan_vraagprijs_eur": med,
+            "gemiddelde_prijs_per_m2_eur": gem_m2,
+            "mediaan_prijs_per_m2_eur": med_m2,
         })
     return resultaat
 
@@ -911,6 +982,11 @@ def woning_bouw_mutaties(vorige_snapshot: dict, huidige_snapshot: dict):
                 "makelaar": bron.get("makelaar"),
                 "funda_url": url,
                 "details": details,
+                # Ruwe oud/nieuw-waarden (None = niet aanwezig in die scan) voor exports.
+                "vraagprijs_oud": oud.get("vraagprijs") if oud else None,
+                "vraagprijs_nieuw": nieuw.get("vraagprijs") if nieuw else None,
+                "status_oud": oud.get("status") if oud else None,
+                "status_nieuw": nieuw.get("status") if nieuw else None,
             })
 
     return aantallen, gewijzigd
@@ -968,6 +1044,8 @@ def bouw_analyseresultaat(args) -> dict:
         "mutatie_aantallen": {},
         "mutatie_rijen": [],
         "vorige_scanmoment_weergave": None,
+        "vorige_scan_id": None,
+        "vorige_scanmoment": None,
         "vorige_aantal_objecten": None,
         "netto_verandering": None,
         # Volledige (ongefilterde) scanteruggang - alleen ter referentie, NOOIT
@@ -1073,6 +1151,8 @@ def bouw_analyseresultaat(args) -> dict:
             basis["vorige_scanmoment_weergave"] = (
                 formatteer_scanmoment(vorige_rij["scanmoment"]) if vorige_rij else None
             )
+            basis["vorige_scan_id"] = vorige_scan_id
+            basis["vorige_scanmoment"] = vorige_rij["scanmoment"] if vorige_rij else None
             basis["vorige_aantal_objecten"] = len(vorige_gefilterd)
             basis["netto_verandering"] = len(huidige_gefilterd) - len(vorige_gefilterd)
 
@@ -1244,8 +1324,14 @@ def bereken_business_kpis(rijen: list[dict]) -> dict:
     )
     bekende_makelaars = {(r.get("makelaar") or "").strip() for r in rijen if (r.get("makelaar") or "").strip()}
     zonder_makelaar = sum(1 for r in rijen if not (r.get("makelaar") or "").strip())
+    oppervlaktes = [r["oppervlakte_m2"] for r in rijen if r.get("oppervlakte_m2") is not None and r["oppervlakte_m2"] > 0]
 
     return {
+        # Ruwe numerieke velden (None = onbekend) voor machineleesbare exports.
+        "totaal_m2": totaal_m2 if oppervlaktes else None,
+        "aantal_met_oppervlakte": len(oppervlaktes),
+        "gemiddelde_oppervlakte_m2": round(sum(oppervlaktes) / len(oppervlaktes)) if oppervlaktes else None,
+        "mediaan_oppervlakte_m2": round(statistics.median(oppervlaktes)) if oppervlaktes else None,
         "actief_aanbod": aantal,
         "kantoor": kantoor,
         "bedrijfsruimte": bedrijfsruimte,
@@ -1319,12 +1405,13 @@ def bouw_business_makelaarstabel(rijen: list[dict]) -> list[dict]:
     for r in rijen:
         naam = (r.get("makelaar") or "").strip() or "Onbekend"
         entry = per_makelaar.setdefault(naam, {
-            "makelaar": naam, "aantal": 0, "m2": 0.0,
+            "makelaar": naam, "aantal": 0, "m2": 0.0, "aantal_met_m2": 0,
             "huur": 0, "koop": 0, "koopprijzen": [], "jaarhuren": [],
         })
         entry["aantal"] += 1
         if r.get("oppervlakte_m2") is not None:
             entry["m2"] += r["oppervlakte_m2"]
+            entry["aantal_met_m2"] += 1
         if business_is_huur_aanbod(r):
             entry["huur"] += 1
         if business_is_koop_aanbod(r):
@@ -1357,6 +1444,11 @@ def bouw_business_makelaarstabel(rijen: list[dict]) -> list[dict]:
             "aandeel_jaarhuur_pct": (
                 round(jaarhuur / totaal_jaarhuur * 100, 1) if jaarhuur and totaal_jaarhuur else None
             ),
+            # Ruwe numerieke tegenhangers (None = onbekend) voor exports.
+            "m2": entry["m2"] if entry["aantal_met_m2"] else None,
+            "aantal_met_m2": entry["aantal_met_m2"],
+            "koopwaarde_eur": koopwaarde,
+            "jaarhuur_eur": jaarhuur,
         })
 
     tabel.sort(key=lambda x: x["aantal"], reverse=True)
@@ -1444,6 +1536,12 @@ def bereken_business_segmentanalyse(
             "koop_aantal": entry["koop_aantal"],
             "gemiddelde_koop_m2": (formatteer_bedrag(gem_koop) + " /m²") if gem_koop is not None else "-",
             "mediaan_koop_m2": (formatteer_bedrag(med_koop) + " /m²") if med_koop is not None else "-",
+            # Ruwe numerieke tegenhangers (None = onbekend) voor exports.
+            "m2": entry["m2"] if entry["aantal"] else None,
+            "gemiddelde_huur_m2jaar_eur": gem_huur,
+            "mediaan_huur_m2jaar_eur": med_huur,
+            "gemiddelde_koop_m2_eur": gem_koop,
+            "mediaan_koop_m2_eur": med_koop,
         })
     return resultaat
 
@@ -1457,12 +1555,13 @@ def bouw_business_plaatsvergelijking(rijen: list[dict]) -> list[dict]:
     for r in rijen:
         plaats = (r.get("plaats") or "").strip() or "Onbekend"
         entry = per_plaats.setdefault(plaats, {
-            "plaats": plaats, "aantal": 0, "m2": 0.0, "huur": 0, "koop": 0,
+            "plaats": plaats, "aantal": 0, "m2": 0.0, "aantal_met_m2": 0, "huur": 0, "koop": 0,
             "huur_m2jaar": [], "koop_m2prijs": [], "makelaars": set(),
         })
         entry["aantal"] += 1
         if r.get("oppervlakte_m2") is not None:
             entry["m2"] += r["oppervlakte_m2"]
+            entry["aantal_met_m2"] += 1
         if business_is_huur_aanbod(r):
             entry["huur"] += 1
         if business_is_koop_aanbod(r):
@@ -1492,6 +1591,14 @@ def bouw_business_plaatsvergelijking(rijen: list[dict]) -> list[dict]:
             "gemiddelde_koop_m2": (formatteer_bedrag(gem_koop) + " /m²") if gem_koop is not None else "-",
             "mediaan_koop_m2": (formatteer_bedrag(med_koop) + " /m²") if med_koop is not None else "-",
             "aantal_makelaars": len(entry["makelaars"]),
+            # Ruwe numerieke tegenhangers (None = onbekend) voor exports.
+            "m2": entry["m2"] if entry["aantal_met_m2"] else None,
+            "gemiddelde_huur_m2jaar_eur": gem_huur,
+            "mediaan_huur_m2jaar_eur": med_huur,
+            "huur_m2jaar_aantal": len(entry["huur_m2jaar"]),
+            "gemiddelde_koop_m2_eur": gem_koop,
+            "mediaan_koop_m2_eur": med_koop,
+            "koop_m2_aantal": len(entry["koop_m2prijs"]),
         })
     tabel.sort(key=lambda x: x["aantal"], reverse=True)
     return tabel
@@ -1556,6 +1663,14 @@ def business_type_weergave(rij: dict) -> str:
 def verrijk_business_rij(rij: dict, geschiedenis: dict[str, tuple]) -> dict:
     rij = dict(rij)
     eerste, laatste = geschiedenis.get(rij.get("funda_object_id"), (None, None))
+    # Ruwe ISO-scanmomenten + afgeleide koopprijs/m² (None = onbekend) voor
+    # exports; zelfde formule als plaatsvergelijking.
+    rij["eerste_waarneming_moment"] = eerste
+    rij["laatste_waarneming_moment"] = laatste
+    rij["koopprijs_per_m2_eur"] = (
+        round(rij["koopprijs"] / rij["oppervlakte_m2"])
+        if rij.get("koopprijs") is not None and rij.get("oppervlakte_m2") else None
+    )
     rij["eerste_waarneming"] = formatteer_scanmoment(eerste) if eerste else "-"
     rij["laatste_waarneming"] = formatteer_scanmoment(laatste) if laatste else "-"
 
@@ -1670,6 +1785,14 @@ def business_bouw_mutaties(vorige_snapshot: dict, huidige_snapshot: dict):
                 "funda_object_id": oid,
                 "funda_url": bron.get("funda_url"),
                 "details": details,
+                # Ruwe oud/nieuw-waarden (None = niet aanwezig in die scan) voor exports.
+                "makelaar": bron.get("makelaar"),
+                "koopprijs_oud": oud.get("koopprijs") if oud else None,
+                "koopprijs_nieuw": nieuw.get("koopprijs") if nieuw else None,
+                "huurprijs_oud": oud.get("huurprijs") if oud else None,
+                "huurprijs_nieuw": nieuw.get("huurprijs") if nieuw else None,
+                "huurprijs_eenheid_oud": oud.get("huurprijs_eenheid") if oud else None,
+                "huurprijs_eenheid_nieuw": nieuw.get("huurprijs_eenheid") if nieuw else None,
             })
 
     return aantallen, gewijzigd
@@ -1710,6 +1833,8 @@ def bouw_business_analyseresultaat(args) -> dict:
         "mutatie_aantallen": {},
         "mutatie_rijen": [],
         "vorige_scanmoment_weergave": None,
+        "vorige_scan_id": None,
+        "vorige_scanmoment": None,
         "vorige_aantal_objecten": None,
         "netto_verandering": None,
     }
@@ -1742,6 +1867,10 @@ def bouw_business_analyseresultaat(args) -> dict:
             "gebied": gebied,
             "categorieen": categorieen_canoniek,
             "scanmoment_weergave": formatteer_scanmoment(scanmoment),
+            "scanmoment": scanmoment,
+            "peildatum": con.execute(
+                "SELECT peildatum FROM business_scans WHERE scan_id = ?", (scan_id,)
+            ).fetchone()["peildatum"],
             # Ongefilterd totaal (niet de status-/transactietype-gefilterde
             # kpis.actief_aanbod) - consistent met vorige_aantal_objecten/
             # netto_verandering hieronder, die ook op het volledige snapshot
@@ -1780,7 +1909,9 @@ def bouw_business_analyseresultaat(args) -> dict:
             vorige_rij = con.execute(
                 "SELECT scanmoment, aantal_objecten FROM business_scans WHERE scan_id = ?", (vorige_scan_id,)
             ).fetchone()
+            basis["vorige_scan_id"] = vorige_scan_id
             if vorige_rij:
+                basis["vorige_scanmoment"] = vorige_rij["scanmoment"]
                 basis["vorige_scanmoment_weergave"] = formatteer_scanmoment(vorige_rij["scanmoment"])
                 basis["vorige_aantal_objecten"] = vorige_rij["aantal_objecten"]
                 basis["netto_verandering"] = len(huidige_snapshot) - vorige_rij["aantal_objecten"]
@@ -2586,6 +2717,465 @@ def export_csv():
     )
 
 
+# --- AI-analyse-export (JSON) -------------------------------------------------
+# Eén zelfstandig JSON-bestand dat de gebruiker handmatig aan een AI-chat kan
+# geven. GEEN externe API, GEEN eigen rekenengine: alle cijfers komen uit
+# dezelfde bouw_analyseresultaat()-pipeline als de analysepagina (ruwe *_eur/
+# *_m2-velden naast de bestaande *_weergave-velden). De generieke delen
+# (schema-versie, AI-taak, algemene methodiekregels, download-response) zijn
+# module-onafhankelijk zodat Business later hetzelfde principe kan volgen.
+
+AI_EXPORT_SCHEMA_VERSIE = "1.0"
+
+AI_EXPORT_SUGGESTED_TASK = (
+    "Analyseer deze vastgoedmarkt op basis van uitsluitend de aangeleverde data. "
+    "Onderzoek marktleiders, lokale makelaarsposities, geografische verschillen, "
+    "prijssegmenten, marktintensiteit, opvallende objecten en, indien betrouwbare "
+    "vergelijkbare historie beschikbaar is, marktontwikkelingen. Maak duidelijk "
+    "onderscheid tussen feitelijke observaties uit de data en interpretaties."
+)
+
+AI_EXPORT_ALGEMENE_METHODIEK = [
+    "Alle cijfers zijn afgeleid uit eigen periodieke scans van openbaar Funda-aanbod op één scanmoment (snapshot); het is een momentopname van vraagprijzen/-huren, geen transactiedata.",
+    "null (of een ontbrekende waarde) betekent 'onbekend/niet beschikbaar' en is NIET hetzelfde als 0. Er zijn geen ontbrekende gegevens geschat of aangevuld.",
+    "Bedragen zijn in euro's zoals op Funda vermeld (ruwe getallen, geen opmaak), oppervlaktes in m², percentages als getal 0-100.",
+    "Alle aandelen en totalen gelden uitsluitend binnen de geselecteerde markt (export_info.selectie): dezelfde scan en filters als de analysepagina.",
+]
+
+
+def _leeg_naar_none(waarde):
+    """Lege strings/'-'-placeholders uit de database of weergave worden null -
+    nooit een verzonnen waarde."""
+    if waarde is None:
+        return None
+    if isinstance(waarde, str) and waarde.strip() in ("", "-"):
+        return None
+    return waarde
+
+
+def _funda_object_id(url: str | None) -> str | None:
+    """Het numerieke Funda-object-ID aan het einde van de detail-URL (bv.
+    .../80877784). None als de URL dat patroon niet heeft - nooit geraden."""
+    m = re.search(r"/(\d+)/?$", url or "")
+    return m.group(1) if m else None
+
+
+def _json_download_response(data: dict, bestandsnaam: str) -> Response:
+    """Generieke UTF-8 JSON-download (zonder BOM), herbruikbaar voor Business."""
+    inhoud = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    return Response(
+        inhoud,
+        mimetype="application/json",
+        headers={"Content-Disposition": f"attachment; filename={bestandsnaam}"},
+    )
+
+
+WONINGEN_AI_FIELD_DEFINITIONS = {
+    "export_info": {
+        "scan.scan_id / scanmoment / peildatum": "Het scanmoment (snapshot) waarop ALLE cijfers in dit bestand betrekking hebben.",
+        "scan.gebied / plaatsen_in_scan": "De regio die in die scan is gescand. Plaatsen buiten deze lijst hebben in deze scan per definitie geen data.",
+        "scan.aantal_objecten_volledige_scan": "Aantal objecten in de volledige, ongefilterde scan (alle plaatsen/statussen/bouwcategorieën) - ter referentie.",
+        "analysetype": "'actueel' = de meest recente scan in de database; 'historisch' = bewust een eerdere scan gekozen via de peildatumselector.",
+        "selectie.plaatsen": "Plaatsfilter. Leeg = geen plaatsfilter (alle plaatsen uit de scan).",
+        "selectie.statussen / bouwcategorieen": "Actieve filters. Bouwcategorie 'Alles' = geen bouwcategoriefilter.",
+        "methodiek": "Zie methodiek.toelichting - bepaalt welke scans onderling vergelijkbaar zijn.",
+        "waarschuwingen": "Automatisch gedetecteerde aandachtspunten voor de interpretatie van dit bestand.",
+    },
+    "markt": {
+        "aantal_objecten": "Aantal unieke objecten (op Funda-URL) in de geselecteerde markt. Noemer van alle marktaandelen.",
+        "totale_vraagwaarde_eur": "Som van alle BEKENDE vraagprijzen (objecten zonder vraagprijs tellen niet mee, zie aantal_met_vraagprijs).",
+        "gemiddelde_vraagprijs_eur / mediaan_vraagprijs_eur": "Over uitsluitend objecten met een bekende vraagprijs.",
+        "gemiddelde_prijs_per_m2_eur / mediaan_prijs_per_m2_eur": "Vraagprijs / woonoppervlakte per object, daarna gemiddeld/mediaan; alleen objecten met beide waarden > 0.",
+        "totaal_woonoppervlakte_m2": "Som van alle bekende woonoppervlaktes.",
+        "aantal_makelaars": "Aantal verschillende BEKENDE makelaars. Objecten zonder herkende makelaar ('Onbekend') tellen niet als makelaar, maar wel in aantal_objecten.",
+        "per_status": "Aantal objecten per Funda-status binnen de selectie (bij een statusfilter zijn niet-geselecteerde statussen logischerwijs 0).",
+    },
+    "gebieden.per_plaats": {
+        "inwoners": "Inwonertal van de kern (niet de gemeente), statische bron: CBS-cijfers via Wikipedia, peildatum in inwoners_peildatum. null = geen betrouwbaar kerncijfer beschikbaar.",
+        "aanbod": "Aantal objecten in de selectie in deze plaats. 0 bij een geselecteerde plaats zonder aanbod (nulgebied, is_nulgebied=true) - dat is een echte waarneming, geen ontbrekende data.",
+        "aanbod_per_1000_inwoners": "aanbod / inwoners x 1000.",
+        "aandeel_aanbod_pct": "Aandeel van deze plaats in het totale aanbod van de selectie.",
+        "aandeel_inwoners_pct": "Aandeel van deze plaats in de som van inwoners van alle geselecteerde plaatsen met een bekend inwonertal.",
+        "verschil_pp": "aandeel_aanbod_pct - aandeel_inwoners_pct, in procentpunten.",
+        "verwacht_aanbod": "Totaal aanbod selectie x (inwoners plaats / totaal inwoners selectie): het aanbod als dat exact evenredig met het inwonertal verdeeld zou zijn.",
+        "marktintensiteitsindex": "aanbod / verwacht_aanbod x 100. Zie methodologie.",
+    },
+    "gebieden.per_gemeente": {
+        "inwoners_gemeente_officieel": "Volledig officieel gemeentelijk inwonertal (CBS, 1-1-2026) - UITSLUITEND context, NIET gebruikt voor marktintensiteit.",
+        "inwoners_selectie": "Som van de kern-inwonertallen van alleen de geselecteerde plaatsen binnen deze gemeente (plaatsen_in_selectie). Dit is de noemer voor marktintensiteit, zodat teller (aanbod) en noemer dezelfde geografische scope hebben.",
+        "aanbod_per_1000_inwoners_gemeente_officieel": "aanbod / inwoners_gemeente_officieel x 1000. Let op: bij een gedeeltelijk gescande gemeente is dit per definitie laag, omdat het aanbod alleen uit de geselecteerde plaatsen komt.",
+        "aandeel_inwoners_pct / verwacht_aanbod / marktintensiteitsindex": "Identiek aan per_plaats, maar met inwoners_selectie als inwonerbasis.",
+    },
+    "makelaars": {
+        "naam": "Makelaarsnaam zoals op Funda vermeld. 'Onbekend' (is_onbekend=true) = objecten zonder herkende makelaar; dit is geen makelaar.",
+        "aantal_objecten": "Aantal objecten van deze makelaar in de selectie.",
+        "marktaandeel_pct": "aantal_objecten / markt.aantal_objecten x 100 - aandeel in het AANTAL objecten binnen de geselecteerde markt (geen omzet-, transactie- of verkoopaandeel).",
+        "rang_in_selectie": "Positie op aantal objecten onder bekende makelaars (gelijke aantallen delen dezelfde rang, bv. 2, 2, 4). null voor 'Onbekend'.",
+        "totale_vraagwaarde_eur / gemiddelde / mediaan": "Over bekende vraagprijzen van deze makelaar.",
+        "woonoppervlakte_m2": "Som van de bekende woonoppervlaktes van het aanbod van deze makelaar.",
+        "lokale_posities": "Per plaats/gemeente waar de makelaar actief is: objecten_makelaar, totaal_markt (alle objecten in dat gebied binnen de selectie), marktaandeel_pct en ranking binnen dat gebied (gelijke aantallen delen dezelfde rang; objecten zonder makelaar tellen als één groep 'Onbekend' mee in de ranking). Marktintensiteit is uitsluitend gebiedscontext en beïnvloedt het marktaandeel niet.",
+        "volgorde": "De lijst is gesorteerd op aantal_objecten, aflopend (marktleider eerst). Alle makelaars zijn opgenomen, niet alleen de top 5 uit de schermweergave.",
+    },
+    "prijssegmenten": {
+        "segment / ondergrens_eur / bovengrens_eur": "Vraagprijsklasse; ondergrens inclusief, bovengrens exclusief; bovengrens null = geen bovengrens.",
+        "aantal / aandeel_pct": "Alleen objecten met een bekende, positieve vraagprijs tellen mee (aandeel binnen die groep).",
+        "gemiddelde_prijs_per_m2_eur / mediaan": "Binnen het segment, alleen objecten met bekende woonoppervlakte.",
+    },
+    "marktdynamiek": {
+        "vergelijking_beschikbaar": "true alleen als er volgens de methodiek een vergelijkbare vorige scan bestaat (exact hetzelfde scangebied, en aan dezelfde kant van de methodiekgrens). Bij false zijn er bewust GEEN vergelijkingscijfers opgenomen.",
+        "gefilterde_selectie": "Vorige vs. huidige scan binnen exact dezelfde filters als de rest van dit bestand. Primaire vergelijking.",
+        "volledige_scan_referentie": "Vergelijking van de volledige, ongefilterde scans - NIET dezelfde populatie als gefilterde_selectie, alleen ter referentie.",
+        "mutaties": "Objecten die zijn bijgekomen ('Nieuw aanbod'), niet meer zijn aangetroffen ('Uit aanbod') of gewijzigd. 'Uit aanbod' betekent uitsluitend: niet meer aangetroffen in de volgende scan - NIET automatisch verkocht.",
+        "dagen_in_monitor": "Aantal dagen tussen de eerste en de laatste waarneming van een object in de database (tot en met deze scan). Dit is observatieduur in onze scans, niet de werkelijke looptijd op Funda.",
+    },
+    "objecten": {
+        "object_id": "Unieke sleutel van het object binnen een scan: de Funda-detail-URL.",
+        "funda_object_id": "Numeriek Funda-ID uit de URL; null als de URL dat niet bevat.",
+        "vraagprijs_eur": "Vraagprijs in euro's (ruw getal); null = geen vraagprijs vermeld (bv. 'prijs op aanvraag').",
+        "woonoppervlakte_m2 / perceeloppervlakte_m2": "In m²; null = onbekend (perceel ontbreekt bv. vaak bij appartementen).",
+        "prijs_per_m2_eur": "vraagprijs_eur / woonoppervlakte_m2, afgerond; null als een van beide ontbreekt.",
+        "slaapkamers / energielabel": "Zoals op Funda vermeld; null = niet vermeld (niet geschat).",
+        "makelaar": "null = geen makelaar herkend ('Onbekend' in makelaars).",
+        "eerste_waarneming / laatste_waarneming": "Datum waarop het object voor het eerst / laatst in onze scans is aangetroffen (tot en met deze scan, over alle eerder opgeslagen scans heen).",
+        "prijswijziging_sinds_eerste_waarneming_eur": "Huidige vraagprijs minus de vraagprijs bij de eerste waarneming; 0 = ongewijzigd; null = niet te bepalen.",
+        "waarschuwing": "Eventuele datakwaliteitsmelding van de scanner voor dit object.",
+    },
+}
+
+WONINGEN_AI_METHODOLOGIE = AI_EXPORT_ALGEMENE_METHODIEK + [
+    "Marktaandeel makelaar = aandeel in het aantal objecten binnen de geselecteerde markt (objecten makelaar / totaal objecten selectie x 100). Het zegt niets over verkochte woningen of omzet.",
+    "Marktintensiteitsindex: 100 = het aanbod van een gebied is precies evenredig aan zijn inwonersaandeel binnen de selectie; >100 = relatief meer aanbod dan op basis van het inwonersaandeel verwacht; <100 = relatief minder. Dit bewijst op zichzelf GEEN woningtekort, verkoopsnelheid of marktgezondheid.",
+    "Marktintensiteit gebruikt altijd dezelfde geografische scope voor teller en noemer: alleen de inwoners van de daadwerkelijk geselecteerde plaatsen, ook op gemeenteniveau (nooit het volledige gemeentelijke inwonertal).",
+    f"Methodiekgrens {WONINGEN_METHODIEK_WIJZIGING}: Woningen-scans van vóór dit moment waren door een inmiddels opgeloste scannerfout structureel onvolledig (soms <25% van het werkelijke aanbod). Scans van vóór en na deze grens worden NOOIT met elkaar vergeleken; een 'aanbodsprong' over deze grens heen zou fictief zijn.",
+    "Marktdynamiek vergelijkt alleen scans met exact hetzelfde scangebied. Een scan met een andere regioselectie is niet vergelijkbaar, ook niet als de plaatsen grotendeels overlappen.",
+]
+
+
+def bouw_woningen_ai_export(resultaat: dict, exportmoment: datetime | None = None) -> dict:
+    """Zet een bouw_analyseresultaat()-resultaat om naar de AI-exportstructuur.
+    Uitsluitend herstructurering van al berekende waarden (ruwe *_eur-velden
+    en ruwe_rijen) - geen nieuwe formules, zodat de export per definitie
+    aansluit op de analysepagina met dezelfde filters."""
+    exportmoment = exportmoment or datetime.now()
+    scaninfo = resultaat["scaninfo"] or {}
+    kpis = resultaat["kpis"] or {}
+    ruwe_rijen = resultaat["ruwe_rijen"]
+    plaatsen = resultaat["plaatsen"]
+    gebied = scaninfo.get("gebied") or ""
+    plaatsen_in_scan = [p.strip() for p in gebied.split("|") if p.strip()]
+    is_nieuwe_methodiek = resultaat["is_nieuwe_methodiek"]
+
+    # --- export_info ---
+    waarschuwingen = []
+    buiten_scan = [p for p in plaatsen if p not in plaatsen_in_scan]
+    if buiten_scan:
+        waarschuwingen.append(
+            f"Geselecteerde plaats(en) {', '.join(buiten_scan)} vallen buiten het scangebied van deze scan "
+            f"({gebied}); daarvoor bevat dit bestand dus geen waarnemingen (aanbod 0 betekent hier 'niet gescand', niet 'geen aanbod')."
+        )
+    if not is_nieuwe_methodiek:
+        waarschuwingen.append(
+            f"Deze scan is van vóór de methodiekwijziging ({WONINGEN_METHODIEK_WIJZIGING}) en kan structureel "
+            "onvolledig zijn; absolute aantallen en marktaandelen zijn daardoor minder betrouwbaar."
+        )
+    if not ruwe_rijen:
+        waarschuwingen.append("De selectie bevat 0 objecten.")
+
+    if is_nieuwe_methodiek:
+        methodiek_toelichting = (
+            "Deze scan valt onder de nieuwe, betrouwbare scanmethodiek en wordt alleen vergeleken met "
+            "scans van hetzelfde gebied die ook onder de nieuwe methodiek vallen."
+        )
+    else:
+        methodiek_toelichting = (
+            "Deze scan valt onder de oude scanmethodiek (mogelijk onvolledig) en wordt alleen vergeleken met "
+            "andere oude scans van hetzelfde gebied."
+        )
+
+    export_info = {
+        "bron": "Makelaar Monitor",
+        "module": "woningen",
+        "schema_versie": AI_EXPORT_SCHEMA_VERSIE,
+        "exportmoment": exportmoment.isoformat(timespec="seconds"),
+        "analysetype": "historisch" if resultaat["is_historisch"] else "actueel",
+        "scan": {
+            "scan_id": scaninfo.get("scan_id"),
+            "scanmoment": scaninfo.get("scanmoment"),
+            "peildatum": scaninfo.get("peildatum"),
+            "gebied": gebied or None,
+            "plaatsen_in_scan": plaatsen_in_scan,
+            "aantal_objecten_volledige_scan": scaninfo.get("aantal_objecten"),
+            "meest_recente_scan_id_in_database": resultaat["laatste_scan_id"],
+        },
+        "selectie": {
+            "plaatsen": list(plaatsen),
+            "statussen": list(resultaat["statussen"]),
+            "bouwcategorieen": list(resultaat["bouwcategorieen"]),
+        },
+        "methodiek": {
+            "woningen_methodiek_wijziging": WONINGEN_METHODIEK_WIJZIGING,
+            "scan_valt_onder_nieuwe_methodiek": is_nieuwe_methodiek,
+            "eerste_scan_van_nieuwe_meetreeks": resultaat["eerste_van_nieuwe_meetreeks"],
+            "toelichting": methodiek_toelichting,
+            "bron_inwonertallen": "Statische referentietabel (CBS-cijfers via Wikipedia): kernen peildatum 2023-01-01, gemeenten 2026-01-01.",
+        },
+        "waarschuwingen": waarschuwingen,
+    }
+
+    # --- markt ---
+    per_bouwcategorie: dict[str, int] = {}
+    for r in ruwe_rijen:
+        cat = _leeg_naar_none(r.get("bouwcategorie")) or "Onbekend"
+        per_bouwcategorie[cat] = per_bouwcategorie.get(cat, 0) + 1
+    markt = {
+        "aantal_objecten": kpis.get("aantal_objecten", 0),
+        "aantal_met_vraagprijs": kpis.get("aantal_met_vraagprijs", 0),
+        "totale_vraagwaarde_eur": kpis.get("totale_vraagwaarde_eur"),
+        "gemiddelde_vraagprijs_eur": kpis.get("gemiddelde_vraagprijs_eur"),
+        "mediaan_vraagprijs_eur": kpis.get("mediaan_vraagprijs_eur"),
+        "aantal_met_prijs_per_m2": kpis.get("aantal_met_prijs_per_m2", 0),
+        "gemiddelde_prijs_per_m2_eur": kpis.get("gemiddelde_prijs_per_m2_eur"),
+        "mediaan_prijs_per_m2_eur": kpis.get("mediaan_prijs_per_m2_eur"),
+        "aantal_met_woonoppervlakte": kpis.get("aantal_met_woonoppervlakte", 0),
+        "totaal_woonoppervlakte_m2": kpis.get("totaal_woonoppervlakte_m2"),
+        "aantal_makelaars": kpis.get("aantal_makelaars", 0),
+        "aantal_objecten_zonder_makelaar": kpis.get("aantal_zonder_makelaar", 0),
+        "per_status": {
+            "Beschikbaar": kpis.get("beschikbaar", 0),
+            "Onder bod": kpis.get("onder_bod", 0),
+            "Verkocht onder voorbehoud": kpis.get("verkocht_ov", 0),
+        },
+        "per_bouwcategorie": per_bouwcategorie,
+        "dagen_in_monitor": {
+            "aantal_objecten_met_waarde": resultaat["dagen_in_monitor_stats"]["aantal"],
+            "gemiddelde": resultaat["dagen_in_monitor_stats"]["gemiddelde"],
+            "mediaan": resultaat["dagen_in_monitor_stats"]["mediaan"],
+        },
+    }
+
+    # --- gebieden ---
+    per_plaats = [
+        {
+            "plaats": p["plaats"],
+            "gemeente": _leeg_naar_none(p["gemeente"]),
+            "provincie": p["provincie"],
+            "inwoners": p["inwoners"],
+            "inwoners_peildatum": p["inwoners_peildatum"],
+            "aanbod": p["aantal"],
+            "is_nulgebied": p["aantal"] == 0,
+            "beschikbaar": p["beschikbaar"],
+            "onder_bod": p["onder_bod"],
+            "verkocht_onder_voorbehoud": p["verkocht_ov"],
+            "aanbod_per_1000_inwoners": p["aanbod_per_1000_inwoners"],
+            "aandeel_aanbod_pct": p["aandeel_aanbod_pct"],
+            "aandeel_inwoners_pct": p["aandeel_inwoners_pct"],
+            "verschil_pp": p["verschil_pp"],
+            "verwacht_aanbod": p["verwacht_aanbod"],
+            "marktintensiteitsindex": p["marktintensiteitsindex"],
+            "totale_vraagwaarde_eur": p["totale_vraagwaarde_eur"],
+            "gemiddelde_vraagprijs_eur": p["gemiddelde_vraagprijs_eur"],
+            "gemiddelde_prijs_per_m2_eur": p["gemiddelde_prijs_per_m2_eur"],
+        }
+        for p in resultaat["plaatsverdeling"]
+    ]
+    per_gemeente = [
+        {
+            "gemeente": g["gemeente"],
+            "provincie": _leeg_naar_none(g["provincie"]),
+            "plaatsen_in_selectie": g["plaatsen_in_selectie"],
+            "inwoners_gemeente_officieel": g["inwoners_gemeente"],
+            "inwoners_selectie": g["inwoners_selectie"],
+            "aanbod": g["aantal"],
+            "is_nulgebied": g["aantal"] == 0,
+            "beschikbaar": g["beschikbaar"],
+            "onder_bod": g["onder_bod"],
+            "verkocht_onder_voorbehoud": g["verkocht_ov"],
+            "aanbod_per_1000_inwoners_gemeente_officieel": g["aanbod_per_1000_inwoners"],
+            "aandeel_aanbod_pct": g["aandeel_aanbod_pct"],
+            "aandeel_inwoners_pct": g["aandeel_inwoners_pct"],
+            "verschil_pp": g["verschil_pp"],
+            "verwacht_aanbod": g["verwacht_aanbod"],
+            "marktintensiteitsindex": g["marktintensiteitsindex"],
+            "totale_vraagwaarde_eur": g["totale_vraagwaarde_eur"],
+            "gemiddelde_vraagprijs_eur": g["gemiddelde_vraagprijs_eur"],
+            "gemiddelde_prijs_per_m2_eur": g["gemiddelde_prijs_per_m2_eur"],
+        }
+        for g in resultaat["gemeenteverdeling"]
+    ]
+
+    # --- makelaars (ALLE, niet alleen de top 5 van de UI) ---
+    bekende_aantallen = sorted(
+        (m["aantal"] for m in resultaat["makelaarstabel"] if not m["is_onbekend"]), reverse=True
+    )
+
+    def _lokale_posities(naam: str, niveau: str, context: list[dict]) -> list[dict]:
+        return [
+            {
+                "gebied": lp["gebied"],
+                "objecten_makelaar": lp["objecten_makelaar"],
+                "totaal_markt": lp["totaal_markt"],
+                "marktaandeel_pct": lp["marktaandeel_pct"],
+                "ranking": lp["ranking"],
+                "marktintensiteitsindex_gebied": lp["marktintensiteitsindex"],
+            }
+            for lp in bouw_makelaar_lokale_marktpositie(naam, ruwe_rijen, niveau, context)
+        ]
+
+    makelaars = []
+    for m in resultaat["makelaarstabel"]:
+        onbekend = m["is_onbekend"]
+        makelaars.append({
+            "naam": m["makelaar"],
+            "is_onbekend": onbekend,
+            "aantal_objecten": m["aantal"],
+            "marktaandeel_pct": m["aandeel_pct"],
+            "rang_in_selectie": None if onbekend else bekende_aantallen.index(m["aantal"]) + 1,
+            "aantal_met_vraagprijs": m["aantal_met_vraagprijs"],
+            "totale_vraagwaarde_eur": m["totale_vraagwaarde_eur"],
+            "gemiddelde_vraagprijs_eur": m["gemiddelde_vraagprijs_eur"],
+            "mediaan_vraagprijs_eur": m["mediaan_vraagprijs_eur"],
+            "gemiddelde_prijs_per_m2_eur": m["gemiddelde_prijs_per_m2_eur"],
+            "aantal_met_woonoppervlakte": m["aantal_met_woonoppervlakte"],
+            "woonoppervlakte_m2": m["woonoppervlakte_m2"],
+            "lokale_posities": None if onbekend else {
+                "per_plaats": _lokale_posities(m["makelaar"], "plaats", resultaat["plaatsverdeling"]),
+                "per_gemeente": _lokale_posities(m["makelaar"], "gemeente", resultaat["gemeenteverdeling"]),
+            },
+        })
+
+    # --- prijssegmenten ---
+    prijssegmenten = [
+        {
+            "segment": s["segment"],
+            "ondergrens_eur": grens[1],
+            "bovengrens_eur": grens[2],
+            "aantal": s["aantal"],
+            "aandeel_pct": s["aandeel_pct"],
+            "gemiddelde_vraagprijs_eur": s["gemiddelde_vraagprijs_eur"],
+            "mediaan_vraagprijs_eur": s["mediaan_vraagprijs_eur"],
+            "gemiddelde_prijs_per_m2_eur": s["gemiddelde_prijs_per_m2_eur"],
+            "mediaan_prijs_per_m2_eur": s["mediaan_prijs_per_m2_eur"],
+        }
+        for s, grens in zip(resultaat["segmentanalyse"], WONING_PRIJSSEGMENTEN)
+    ]
+
+    # --- marktdynamiek ---
+    vorige_scanmoment = resultaat["vorige_scanmoment"]
+    vergelijkbaar = resultaat["vorige_scan_id"] is not None and (
+        # Extra vangnet bovenop haal_vorige_scan_id(): nooit een vergelijking
+        # over de methodiekgrens heen presenteren.
+        woningen_is_nieuwe_methodiek(vorige_scanmoment) == is_nieuwe_methodiek
+    )
+    if vergelijkbaar:
+        marktdynamiek = {
+            "vergelijking_beschikbaar": True,
+            "reden_geen_vergelijking": None,
+            "vorige_scan": {"scan_id": resultaat["vorige_scan_id"], "scanmoment": vorige_scanmoment},
+            "beide_scans_oude_methodiek": not is_nieuwe_methodiek,
+            "gefilterde_selectie": {
+                "vorige_aantal": resultaat["vorige_aantal_objecten"],
+                "huidige_aantal": len(ruwe_rijen),
+                "netto_verandering": resultaat["netto_verandering"],
+                "mutaties_per_type": dict(resultaat["mutatie_aantallen"]),
+            },
+            "volledige_scan_referentie": {
+                "vorige_aantal": resultaat["vorige_aantal_objecten_totaal"],
+                "huidige_aantal": resultaat["huidige_aantal_objecten_totaal"],
+                "netto_verandering": resultaat["netto_verandering_totaal"],
+            },
+            "mutaties": [
+                {
+                    "mutatie": mr["mutatie"],
+                    "object_id": mr["funda_url"],
+                    "adres": _leeg_naar_none(mr["adres"]),
+                    "plaats": _leeg_naar_none(mr["plaats"]),
+                    "makelaar": _leeg_naar_none(mr["makelaar"]),
+                    "vraagprijs_oud_eur": mr["vraagprijs_oud"],
+                    "vraagprijs_nieuw_eur": mr["vraagprijs_nieuw"],
+                    "status_oud": _leeg_naar_none(mr["status_oud"]),
+                    "status_nieuw": _leeg_naar_none(mr["status_nieuw"]),
+                }
+                for mr in resultaat["mutatie_rijen"]
+            ],
+        }
+    else:
+        if resultaat["eerste_van_nieuwe_meetreeks"]:
+            reden = (
+                "Dit is de eerste scan van de nieuwe, betrouwbare meetreeks voor dit scangebied. Oudere scans "
+                "(van vóór de methodiekwijziging) bestaan wel, maar zijn bewust niet vergelijkbaar."
+            )
+        else:
+            reden = "Er is (nog) geen eerdere scan met exact hetzelfde scangebied binnen dezelfde methodiek."
+        marktdynamiek = {
+            "vergelijking_beschikbaar": False,
+            "reden_geen_vergelijking": reden,
+            "vorige_scan": None,
+        }
+
+    # --- objecten ---
+    # resultaat["rijen"] is 1-op-1 (zelfde volgorde) verrijkt uit ruwe_rijen;
+    # ruwe velden komen uit ruwe_rijen, afgeleide ruwe velden uit rijen.
+    verrijkt = resultaat["rijen"] or [{} for _ in ruwe_rijen]
+    objecten = []
+    for r, v in zip(ruwe_rijen, verrijkt):
+        dagen = v.get("dagen_in_monitor")
+        objecten.append({
+            "object_id": r.get("funda_url"),
+            "funda_object_id": _funda_object_id(r.get("funda_url")),
+            "funda_url": r.get("funda_url"),
+            "adres": _leeg_naar_none(r.get("adres")),
+            "plaats": _leeg_naar_none(r.get("plaats")),
+            "gemeente": geo_info(r.get("plaats")).get("gemeente"),
+            "status": _leeg_naar_none(r.get("status")),
+            "bouwcategorie": _leeg_naar_none(r.get("bouwcategorie")),
+            "nieuwbouwreden": _leeg_naar_none(r.get("nieuwbouwreden")),
+            "vraagprijs_eur": r.get("vraagprijs"),
+            "woonoppervlakte_m2": r.get("woonoppervlakte"),
+            "perceeloppervlakte_m2": r.get("perceeloppervlakte"),
+            "prijs_per_m2_eur": v.get("prijs_per_m2_eur"),
+            "slaapkamers": r.get("slaapkamers"),
+            "energielabel": _leeg_naar_none(r.get("energielabel")),
+            "makelaar": _leeg_naar_none((r.get("makelaar") or "").strip()),
+            "peildatum": r.get("peildatum"),
+            "eerste_waarneming": _leeg_naar_none(v.get("eerste_waarneming")),
+            "laatste_waarneming": _leeg_naar_none(v.get("laatste_waarneming")),
+            "dagen_in_monitor": dagen if isinstance(dagen, int) else None,
+            "prijswijziging_sinds_eerste_waarneming_eur": v.get("prijswijziging_eur"),
+            "waarschuwing": _leeg_naar_none(r.get("waarschuwing")),
+        })
+
+    return {
+        "export_info": export_info,
+        "markt": markt,
+        "gebieden": {"per_plaats": per_plaats, "per_gemeente": per_gemeente},
+        "makelaars": makelaars,
+        "prijssegmenten": prijssegmenten,
+        "marktdynamiek": marktdynamiek,
+        "objecten": objecten,
+        "methodologie": WONINGEN_AI_METHODOLOGIE,
+        "field_definitions": WONINGEN_AI_FIELD_DEFINITIONS,
+        "suggested_ai_task": AI_EXPORT_SUGGESTED_TASK,
+    }
+
+
+@app.route("/export/ai-json")
+def export_ai_json():
+    """Woningen: 'Export voor AI-analyse' - exact dezelfde analysecontext
+    (scan_id/peildatum, plaatsen, status, bouwcategorie) als de analysepagina,
+    via dezelfde bouw_analyseresultaat()-pipeline als /export/csv."""
+    resultaat = bouw_analyseresultaat(request.args)
+    if resultaat["foutmelding"]:
+        return resultaat["foutmelding"], 404
+
+    exportmoment = datetime.now()
+    data = bouw_woningen_ai_export(resultaat, exportmoment)
+    bestandsnaam = (
+        f"makelaar_monitor_ai_export_woningen_scan{data['export_info']['scan']['scan_id']}"
+        f"_{exportmoment.strftime('%Y%m%d_%H%M')}.json"
+    )
+    return _json_download_response(data, bestandsnaam)
+
+
 BUSINESS_CSV_KOLOMMEN = [
     ("funda_object_id", "Funda_object_id"),
     ("plaats", "Plaats"),
@@ -2633,6 +3223,455 @@ def business_export_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=makelaar_monitor_business_export.csv"},
     )
+
+
+AI_EXPORT_SUGGESTED_TASK_BUSINESS = (
+    "Analyseer deze bedrijfsmatige vastgoedmarkt op basis van uitsluitend de aangeleverde data. "
+    "Onderzoek marktleiders, makelaarsposities, koop- en huurmarkt, segmenten, geografische verschillen, "
+    "oppervlaktes, prijs- en huurkengetallen en opvallende objecten. Gebruik historische ontwikkelingen "
+    "alleen wanneer de export aangeeft dat een betrouwbare vergelijking beschikbaar is. Maak duidelijk "
+    "onderscheid tussen feiten en interpretaties."
+)
+
+BUSINESS_AI_BRONVELDEN = [
+    "adres", "plaats", "gezochte_categorieen", "funda_objecttype", "status", "koopprijs_eur", "koopprijs_conditie",
+    "huurprijs_eur", "huurprijs_eenheid", "oppervlakte_m2", "oppervlakte_extra_m2", "makelaar", "funda_url",
+    "object_id", "peildatum", "waarschuwing",
+]
+BUSINESS_AI_BEREKENDE_VELDEN = [
+    "berekend_jaarhuur_eur", "berekend_maandhuur_eur", "berekend_koopprijs_per_m2_eur", "is_koopaanbod",
+    "is_huuraanbod", "is_koop_en_huur_met_prijs", "gemeente", "eerste_waarneming", "laatste_waarneming",
+    "dagen_in_monitor",
+]
+
+BUSINESS_AI_FIELD_DEFINITIONS = {
+    "veldherkomst": {
+        "gemeten_bronvelden (objecten)": "Letterlijk zoals op de Funda in Business-resultatenlijst aangetroffen (na eenvoudige tekstherkenning): " + ", ".join(BUSINESS_AI_BRONVELDEN) + ".",
+        "berekende_velden (objecten)": "Door Makelaar Monitor afgeleid uit bronvelden, nooit door Funda vermeld: " + ", ".join(BUSINESS_AI_BEREKENDE_VELDEN) + ". Alle prijsafleidingen hebben het voorvoegsel 'berekend_'.",
+    },
+    "export_info": {
+        "analysetype": "Bedrijfsmatig kent (nog) geen historische peildatumselectie: de export is altijd de meest recente scan voor exact deze regio + categorieën.",
+        "scan.gebied / scan.categorieen": "De scan hoort bij exact deze combinatie van plaatsen en gezochte categorieën; een andere combinatie is een andere scanreeks.",
+        "selectie.statussen": "Statusfilter; leeg = geen statusfilter.",
+        "selectie.transactietype": "'Alles' = geen filter; 'Koop' = objecten met koopindicatie (ook n.o.t.k.); 'Huur' = objecten met huurindicatie (ook 'op aanvraag'); 'Koop + Huur' = beide indicaties.",
+    },
+    "markt": {
+        "aantal_objecten": "Aantal unieke objecten in de selectie. Noemer van alle marktaandelen.",
+        "per_categorie": "Aantal objecten per gezochte Funda-categorie (Kantoor/Bedrijfsruimte). Een object kan in beide categorieën vallen, dus de som kan groter zijn dan aantal_objecten.",
+        "koop.aanbod": "Objecten met een koopindicatie: numerieke koopprijs, een koopconditie of 'n.o.t.k.' (= met_prijs + zonder_prijs_notk).",
+        "koop.totale_/gemiddelde_/mediaan_koopprijs_eur": "Alleen over objecten met een numerieke koopprijs (aantal_met_koopprijs). n.o.t.k. telt niet als 0.",
+        "huur.aanbod": "Objecten met een huurindicatie: numerieke huurprijs of 'op aanvraag' (= met_prijs + op_aanvraag).",
+        "huur.per_eenheid": "Aantal objecten per vermelde huurprijseenheid (per_m2_per_jaar, per_maand, per_jaar, op_aanvraag; 'geen' = geen huurprijs vermeld).",
+        "huur.huurprijs_per_m2_per_jaar": "Gemiddelde/mediaan van uitsluitend huurprijzen die Funda per m² per jaar vermeldt (bronwaarde). Maand- en jaarbedragen worden nooit omgerekend of meegemengd.",
+        "huur.berekende_jaarhuur": "Som van berekend_jaarhuur_eur (zie methodologie) - alleen voor objecten met huur per m²/jaar én bekende oppervlakte.",
+        "koop_en_huur_met_prijs": "Objecten met zowel een numerieke koop- als huurprijs (dual listed).",
+        "oppervlakte": "Over objecten met een bekende oppervlakte > 0.",
+        "aantal_makelaars": "Aantal verschillende BEKENDE makelaars; objecten zonder makelaar ('Onbekend') tellen niet als makelaar, wel in aantal_objecten.",
+    },
+    "gebieden.per_plaats": {
+        "aanbod / aandeel_aanbod_pct": "Aantal objecten in deze plaats en aandeel in de selectie.",
+        "koopaanbod / huuraanbod": "Brede koop-/huurindicatie (zie markt); een object kan beide zijn.",
+        "huur_m2jaar_*": "Over uitsluitend huurprijzen per m² per jaar (bronwaarde).",
+        "koop_m2_*": "Koopprijs / oppervlakte over objecten met beide bekend (berekend).",
+        "gemeente / provincie": "Uit een statische referentietabel; null als de plaats daar (nog) niet in staat.",
+    },
+    "makelaars": {
+        "marktaandeel_pct": "aantal_objecten / markt.aantal_objecten x 100 - aandeel in het AANTAL aangeboden objecten binnen de selectie (geen omzet- of transactieaandeel).",
+        "rang_in_selectie": "Positie op aantal objecten onder bekende makelaars (gelijke aantallen delen dezelfde rang). null voor 'Onbekend'.",
+        "marktaandeel_m2_pct / koopwaarde / jaarhuur": "Aandeel in de som van bekende oppervlaktes / numerieke koopprijzen / berekende jaarhuren van de selectie; *_dekking = aantal objecten waarop het bedrag is gebaseerd.",
+        "segmentposities": "Per gezochte categorie: objecten, marktaandeel en rang van de makelaar binnen alleen die categorie.",
+        "lokale_posities": "Per plaats: objecten van de makelaar, totaal in die plaats, marktaandeel en ranking (gelijke aantallen delen dezelfde rang; objecten zonder makelaar tellen als één groep 'Onbekend' mee).",
+        "volgorde": "Gesorteerd op aantal_objecten, aflopend. ALLE makelaars zijn opgenomen, niet alleen de top 5 uit de schermweergave.",
+    },
+    "segmenten": {
+        "per_categorie": "De bestaande hoofdindeling van Makelaar Monitor: de door Funda in Business gezochte categorie (Kantoor, Bedrijfsruimte). Overlap mogelijk.",
+        "grootteklassen_bedrijfsruimte": "Bestaande grootte-indeling voor Bedrijfsruimte op oppervlakte (ondergrens inclusief, bovengrens exclusief). Alleen objecten met bekende oppervlakte > 0.",
+        "funda_objecttypen": "Telling van de letterlijke Funda-objecttypeomschrijving (bron, meerdere typen gescheiden door '|'). Geen eigen classificatie.",
+    },
+    "marktdynamiek": {
+        "vergelijking_beschikbaar": "true alleen als er een eerdere scan bestaat met exact dezelfde regio + categorieën.",
+        "scope": "Mutaties vergelijken altijd de VOLLEDIGE scans (ongefilterd op status/transactietype), niet de gefilterde selectie.",
+        "mutaties": "'Nieuw aanbod' / 'Uit aanbod' / gewijzigd (koopprijs, huurprijs, eenheid, status, makelaar, oppervlakte). 'Uit aanbod' = niet meer aangetroffen, NIET automatisch verkocht of verhuurd. Berekende huur telt nooit als mutatie.",
+    },
+    "objecten": {
+        "object_id": "Funda in Business-object-ID (uniek binnen een scan).",
+        "koopprijs_eur / koopprijs_conditie": "Numerieke koopprijs en de vermelde conditie (k.k. = kosten koper, v.o.n. = vrij op naam). null = geen koopprijs vermeld (bv. n.o.t.k., zie waarschuwing).",
+        "huurprijs_eur / huurprijs_eenheid": "Huurprijs ZOALS VERMELD, in de vermelde eenheid (per_m2_per_jaar, per_maand, per_jaar). Niet omgerekend: 1.833 per_maand is een maandbedrag. 'op_aanvraag' = huur zonder prijs.",
+        "oppervlakte_m2 / oppervlakte_extra_m2": "Vermelde (hoofd)oppervlakte en eventuele extra oppervlakte (bv. buitenterrein).",
+        "berekend_jaarhuur_eur / berekend_maandhuur_eur": "huurprijs_eur x oppervlakte_m2 (resp. /12), UITSLUITEND bij huurprijs_eenheid per_m2_per_jaar. Bij per_maand/per_jaar bewust null (niet omgerekend).",
+        "berekend_koopprijs_per_m2_eur": "koopprijs_eur / oppervlakte_m2, afgerond; null als een van beide ontbreekt.",
+        "is_koopaanbod / is_huuraanbod": "Brede transactie-indicatie (zie markt); beide kunnen true zijn.",
+        "status": "De scanner leest de standaardlijst die uitsluitend actief aangeboden objecten toont; status is daardoor altijd 'Beschikbaar' (geen per object gemeten onder bod/verkocht-status).",
+        "eerste_waarneming / laatste_waarneming / dagen_in_monitor": "Eerste/laatste scanmoment waarop het object in deze scanreeks (zelfde regio + categorieën) is aangetroffen, en het aantal dagen daartussen. Observatieduur, niet de werkelijke looptijd op Funda.",
+    },
+}
+
+BUSINESS_AI_METHODOLOGIE = AI_EXPORT_ALGEMENE_METHODIEK + [
+    "Module bedrijfsmatig: aanbod van kantoren en bedrijfsruimten van Funda in Business (geen woningen). Er zijn geen woningvelden (vraagprijs woning, slaapkamers, energielabel) in dit bestand.",
+    "Koop/huur: een object is koopaanbod als er een koopprijs, koopconditie of 'n.o.t.k.' is vermeld, en huuraanbod als er een huurprijs of 'huur op aanvraag' is vermeld. Een object kan tegelijk koop- en huuraanbod zijn.",
+    "Huurprijzen staan in de eenheid zoals vermeld (per m² per jaar, per maand of per jaar) en worden onderling NIET vergeleken of omgerekend. Huurkengetallen per m² gebruiken uitsluitend prijzen per m² per jaar.",
+    "Berekende jaarhuur = vermelde huurprijs per m² per jaar x vermelde oppervlakte. Alleen voor objecten met huur per m²/jaar en bekende oppervlakte; overige huurobjecten hebben geen berekende jaarhuur (null), ook als ze wel een maand- of jaarhuur vermelden.",
+    "Gemeten (bron) versus berekend: zie field_definitions.veldherkomst. Alle afgeleide prijsvelden per object beginnen met 'berekend_'.",
+    "Marktaandeel makelaar = aandeel in het aantal aangeboden objecten binnen de geselecteerde markt. Aanvullende aandelen (m², koopwaarde, jaarhuur) zijn gebaseerd op uitsluitend bekende waarden, met dekkingstelling.",
+    "Segmenten: de bestaande indeling is de gezochte Funda-categorie (Kantoor/Bedrijfsruimte, overlap mogelijk) plus grootteklassen voor Bedrijfsruimte. Er is geen eigen objecttypeclassificatie; funda_objecttypen zijn letterlijke Funda-omschrijvingen.",
+    "Marktdynamiek vergelijkt alleen scans met exact dezelfde regio + categorieën, altijd op de volledige (ongefilterde) scan.",
+]
+
+
+def bouw_business_ai_export(resultaat: dict, exportmoment: datetime | None = None) -> dict:
+    """Zet een bouw_business_analyseresultaat()-resultaat om naar de AI-
+    exportstructuur. Uitsluitend herstructurering van al berekende waarden;
+    deelaggregaties (per categorie/makelaar) hergebruiken dezelfde centrale
+    Business-functies op een deelverzameling - geen nieuwe formules."""
+    exportmoment = exportmoment or datetime.now()
+    scaninfo = resultaat["scaninfo"] or {}
+    kpis = resultaat["kpis"] or {}
+    huur = resultaat["huur_kpis"] or {}
+    koop = resultaat["koop_kpis"] or {}
+    ruwe_rijen = resultaat["ruwe_rijen"]
+    gebied = scaninfo.get("gebied") or ""
+    totaal = len(ruwe_rijen)
+
+    waarschuwingen = []
+    if not ruwe_rijen:
+        waarschuwingen.append("De selectie bevat 0 objecten.")
+    if resultaat["statussen"] and set(resultaat["statussen"]) != {"Beschikbaar"}:
+        waarschuwingen.append(
+            "De scanner registreert uitsluitend actief aangeboden objecten (status 'Beschikbaar'); "
+            "andere statusfilters leveren daardoor geen extra objecten op."
+        )
+
+    export_info = {
+        "bron": "Makelaar Monitor",
+        "module": "bedrijfsmatig",
+        "schema_versie": AI_EXPORT_SCHEMA_VERSIE,
+        "exportmoment": exportmoment.isoformat(timespec="seconds"),
+        "analysetype": "actueel",
+        "historische_analyse_beschikbaar": False,
+        "scan": {
+            "scan_id": scaninfo.get("scan_id"),
+            "scanmoment": scaninfo.get("scanmoment"),
+            "peildatum": scaninfo.get("peildatum"),
+            "gebied": gebied or None,
+            "plaatsen_in_scan": [p.strip() for p in gebied.split("|") if p.strip()],
+            "categorieen": [c.strip() for c in (scaninfo.get("categorieen") or "").split("|") if c.strip()],
+            "aantal_objecten_volledige_scan": scaninfo.get("aantal_objecten"),
+        },
+        "selectie": {
+            "plaatsen": list(resultaat["plaatsen"]),
+            "categorieen": list(resultaat["categorieen"]),
+            "statussen": list(resultaat["statussen"]),
+            "transactietype": resultaat["transactietype"],
+        },
+        "methodiek": {
+            "toelichting": (
+                "Meest recente Funda in Business-scan voor exact deze regio + categorieën, daarna gefilterd op "
+                "status en transactietype. Er is voor Bedrijfsmatig geen methodiekbreuk vastgelegd (de "
+                "Woningen-methodiekgrens geldt hier niet)."
+            ),
+        },
+        "waarschuwingen": waarschuwingen,
+    }
+
+    per_eenheid: dict[str, int] = {}
+    for r in ruwe_rijen:
+        eenheid = (r.get("huurprijs_eenheid") or "").strip() or "geen"
+        per_eenheid[eenheid] = per_eenheid.get(eenheid, 0) + 1
+
+    markt = {
+        "aantal_objecten": kpis.get("actief_aanbod", 0),
+        "per_categorie": {
+            c: sum(1 for r in ruwe_rijen if c in business_categorieen_van_rij(r)) for c in resultaat["categorieen"]
+        },
+        "koop": {
+            "aanbod": kpis.get("koopaanbod", 0),
+            "met_prijs": kpis.get("koopaanbod_met_prijs", 0),
+            "zonder_prijs_notk": kpis.get("koopaanbod_notk", 0),
+            "aantal_met_koopprijs": koop.get("aantal", 0),
+            "totale_koopvraagwaarde_eur": koop.get("totaal"),
+            "gemiddelde_koopprijs_eur": koop.get("gemiddelde"),
+            "mediaan_koopprijs_eur": koop.get("mediaan"),
+        },
+        "huur": {
+            "aanbod": kpis.get("huuraanbod", 0),
+            "met_prijs": kpis.get("huuraanbod_met_prijs", 0),
+            "op_aanvraag": kpis.get("huuraanbod_op_aanvraag", 0),
+            "per_eenheid": per_eenheid,
+            "huurprijs_per_m2_per_jaar": {
+                "aantal": huur.get("aantal_m2_jaar", 0),
+                "gemiddelde_eur": huur.get("gemiddelde_m2_jaar"),
+                "mediaan_eur": huur.get("mediaan_m2_jaar"),
+            },
+            "berekende_jaarhuur": {
+                "aantal": huur.get("berekende_jaarhuur_aantal", 0),
+                "totaal_eur": huur.get("berekende_jaarhuur_totaal"),
+            },
+        },
+        "koop_en_huur_met_prijs": kpis.get("dual_listed", 0),
+        "oppervlakte": {
+            "aantal_met_oppervlakte": kpis.get("aantal_met_oppervlakte", 0),
+            "totaal_m2": kpis.get("totaal_m2"),
+            "gemiddelde_m2": kpis.get("gemiddelde_oppervlakte_m2"),
+            "mediaan_m2": kpis.get("mediaan_oppervlakte_m2"),
+        },
+        "aantal_makelaars": kpis.get("aantal_makelaars", 0),
+        "aantal_objecten_zonder_makelaar": kpis.get("aantal_zonder_makelaar", 0),
+        "dagen_in_monitor": {
+            "aantal_objecten_met_waarde": resultaat["dagen_in_monitor_stats"]["aantal"],
+            "gemiddelde": resultaat["dagen_in_monitor_stats"]["gemiddelde"],
+            "mediaan": resultaat["dagen_in_monitor_stats"]["mediaan"],
+        },
+    }
+
+    per_plaats = []
+    for p in resultaat["plaatsvergelijking"]:
+        info = geo_info(p["plaats"])
+        per_plaats.append({
+            "plaats": p["plaats"],
+            "gemeente": info.get("gemeente"),
+            "provincie": info.get("provincie"),
+            "aanbod": p["aantal"],
+            "aandeel_aanbod_pct": round(p["aantal"] / totaal * 100, 1) if totaal else None,
+            "koopaanbod": p["koop"],
+            "huuraanbod": p["huur"],
+            "oppervlakte_m2": p["m2"],
+            "huur_m2jaar_aantal": p["huur_m2jaar_aantal"],
+            "huur_m2jaar_gemiddelde_eur": p["gemiddelde_huur_m2jaar_eur"],
+            "huur_m2jaar_mediaan_eur": p["mediaan_huur_m2jaar_eur"],
+            "koop_m2_aantal": p["koop_m2_aantal"],
+            "koop_m2_gemiddelde_eur": p["gemiddelde_koop_m2_eur"],
+            "koop_m2_mediaan_eur": p["mediaan_koop_m2_eur"],
+            "aantal_makelaars": p["aantal_makelaars"],
+        })
+
+    # Segmenten per gezochte categorie: dezelfde centrale functies op de deelverzameling.
+    per_categorie = []
+    makelaar_per_categorie: dict[str, dict[str, dict]] = {}
+    for cat in resultaat["categorieen"]:
+        deel = [r for r in ruwe_rijen if cat in business_categorieen_van_rij(r)]
+        ck, ch, co = bereken_business_kpis(deel), bereken_business_huur_kpis(deel), bereken_business_koop_kpis(deel)
+        cm = bouw_business_makelaarstabel(deel)
+        bekend = sorted((m["aantal"] for m in cm if not m["is_onbekend"]), reverse=True)
+        makelaar_per_categorie[cat] = {
+            m["makelaar"]: {
+                "categorie": cat, "objecten": m["aantal"], "marktaandeel_pct": m["aandeel_pct"],
+                "rang": None if m["is_onbekend"] else bekend.index(m["aantal"]) + 1, "totaal_categorie": len(deel),
+            }
+            for m in cm
+        }
+        per_categorie.append({
+            "categorie": cat,
+            "aantal": len(deel),
+            "aandeel_pct": round(len(deel) / totaal * 100, 1) if totaal else None,
+            "koopaanbod": ck["koopaanbod"],
+            "huuraanbod": ck["huuraanbod"],
+            "oppervlakte_totaal_m2": ck["totaal_m2"],
+            "oppervlakte_gemiddelde_m2": ck["gemiddelde_oppervlakte_m2"],
+            "oppervlakte_mediaan_m2": ck["mediaan_oppervlakte_m2"],
+            "aantal_met_koopprijs": co["aantal"],
+            "gemiddelde_koopprijs_eur": co["gemiddelde"],
+            "mediaan_koopprijs_eur": co["mediaan"],
+            "huur_m2jaar_aantal": ch["aantal_m2_jaar"],
+            "huur_m2jaar_gemiddelde_eur": ch["gemiddelde_m2_jaar"],
+            "huur_m2jaar_mediaan_eur": ch["mediaan_m2_jaar"],
+            "berekende_jaarhuur_totaal_eur": ch["berekende_jaarhuur_totaal"],
+            "aantal_makelaars": ck["aantal_makelaars"],
+            "makelaars": [
+                {"naam": m["makelaar"], "objecten": m["aantal"], "marktaandeel_pct": m["aandeel_pct"]} for m in cm
+            ],
+        })
+
+    grenzen = {label: (onder, boven) for label, onder, boven in BUSINESS_BEDRIJFSRUIMTE_SEGMENTEN}
+    grootteklassen = [
+        {
+            "segment": s["segment"],
+            "ondergrens_m2": grenzen[s["segment"]][0],
+            "bovengrens_m2": grenzen[s["segment"]][1],
+            "aantal": s["aantal"],
+            "oppervlakte_m2": s["m2"],
+            "huur_m2jaar_aantal": s["huur_aantal"],
+            "huur_m2jaar_gemiddelde_eur": s["gemiddelde_huur_m2jaar_eur"],
+            "huur_m2jaar_mediaan_eur": s["mediaan_huur_m2jaar_eur"],
+            "koop_aantal": s["koop_aantal"],
+            "koop_m2_gemiddelde_eur": s["gemiddelde_koop_m2_eur"],
+            "koop_m2_mediaan_eur": s["mediaan_koop_m2_eur"],
+        }
+        for s in resultaat["segmentanalyse_bedrijfsruimte"]
+    ] if "Bedrijfsruimte" in resultaat["categorieen"] else []
+
+    objecttypen: dict[str, int] = {}
+    for r in ruwe_rijen:
+        for t in [t.strip() for t in (r.get("objecttype") or "").split("|") if t.strip()] or ["Onbekend"]:
+            objecttypen[t] = objecttypen.get(t, 0) + 1
+
+    segmenten = {
+        "per_categorie": per_categorie,
+        "grootteklassen_bedrijfsruimte": grootteklassen,
+        "funda_objecttypen": [
+            {"objecttype": t, "aantal": n} for t, n in sorted(objecttypen.items(), key=lambda x: (-x[1], x[0]))
+        ],
+    }
+
+    # --- makelaars (ALLE) ---
+    bekende_aantallen = sorted(
+        (m["aantal"] for m in resultaat["makelaarstabel"] if not m["is_onbekend"]), reverse=True
+    )
+    makelaars = []
+    for m in resultaat["makelaarstabel"]:
+        onbekend = m["is_onbekend"]
+        eigen = [r for r in ruwe_rijen if ((r.get("makelaar") or "").strip() or "Onbekend") == m["makelaar"]]
+        mk, mh = bereken_business_koop_kpis(eigen), bereken_business_huur_kpis(eigen)
+        makelaars.append({
+            "naam": m["makelaar"],
+            "is_onbekend": onbekend,
+            "aantal_objecten": m["aantal"],
+            "marktaandeel_pct": m["aandeel_pct"],
+            "rang_in_selectie": None if onbekend else bekende_aantallen.index(m["aantal"]) + 1,
+            "koopaanbod": m["koop"],
+            "huuraanbod": m["huur"],
+            "oppervlakte_m2": m["m2"],
+            "oppervlakte_dekking": m["aantal_met_m2"],
+            "marktaandeel_m2_pct": m["aandeel_m2_pct"],
+            "koopwaarde_eur": m["koopwaarde_eur"],
+            "koopwaarde_dekking": m["koopwaarde_dekking"],
+            "aandeel_koopwaarde_pct": m["aandeel_koopwaarde_pct"],
+            "gemiddelde_koopprijs_eur": mk["gemiddelde"],
+            "mediaan_koopprijs_eur": mk["mediaan"],
+            "huur_m2jaar_aantal": mh["aantal_m2_jaar"],
+            "huur_m2jaar_gemiddelde_eur": mh["gemiddelde_m2_jaar"],
+            "huur_m2jaar_mediaan_eur": mh["mediaan_m2_jaar"],
+            "berekende_jaarhuur_eur": m["jaarhuur_eur"],
+            "berekende_jaarhuur_dekking": m["jaarhuur_dekking"],
+            "aandeel_jaarhuur_pct": m["aandeel_jaarhuur_pct"],
+            "segmentposities": None if onbekend else [
+                makelaar_per_categorie[c][m["makelaar"]] for c in resultaat["categorieen"]
+                if m["makelaar"] in makelaar_per_categorie.get(c, {})
+            ],
+            "lokale_posities": None if onbekend else [
+                {
+                    "plaats": lp["gebied"],
+                    "objecten_makelaar": lp["objecten_makelaar"],
+                    "totaal_markt": lp["totaal_markt"],
+                    "marktaandeel_pct": lp["marktaandeel_pct"],
+                    "ranking": lp["ranking"],
+                }
+                for lp in bouw_makelaar_lokale_marktpositie(m["makelaar"], ruwe_rijen, "plaats")
+            ],
+        })
+
+    # --- marktdynamiek ---
+    if resultaat["vorige_scan_id"] is not None:
+        marktdynamiek = {
+            "vergelijking_beschikbaar": True,
+            "reden_geen_vergelijking": None,
+            "vorige_scan": {"scan_id": resultaat["vorige_scan_id"], "scanmoment": resultaat["vorige_scanmoment"]},
+            "scope": "volledige_scan",
+            "volledige_scan": {
+                "vorige_aantal": resultaat["vorige_aantal_objecten"],
+                "huidige_aantal": scaninfo.get("aantal_objecten"),
+                "netto_verandering": resultaat["netto_verandering"],
+                "mutaties_per_type": dict(resultaat["mutatie_aantallen"]),
+            },
+            "mutaties": [
+                {
+                    "mutatie": mr["mutatie"],
+                    "object_id": mr["funda_object_id"],
+                    "adres": _leeg_naar_none(mr["adres"]),
+                    "plaats": _leeg_naar_none(mr["plaats"]),
+                    "makelaar": _leeg_naar_none(mr["makelaar"]),
+                    "koopprijs_oud_eur": mr["koopprijs_oud"],
+                    "koopprijs_nieuw_eur": mr["koopprijs_nieuw"],
+                    "huurprijs_oud_eur": mr["huurprijs_oud"],
+                    "huurprijs_nieuw_eur": mr["huurprijs_nieuw"],
+                    "huurprijs_eenheid_oud": _leeg_naar_none(mr["huurprijs_eenheid_oud"]),
+                    "huurprijs_eenheid_nieuw": _leeg_naar_none(mr["huurprijs_eenheid_nieuw"]),
+                }
+                for mr in resultaat["mutatie_rijen"]
+            ],
+        }
+    else:
+        marktdynamiek = {
+            "vergelijking_beschikbaar": False,
+            "reden_geen_vergelijking": (
+                "Er is (nog) geen eerdere Business-scan met exact dezelfde regio + categorieën; "
+                "een vergelijking met een scan van een andere regioselectie zou niet dezelfde markt meten."
+            ),
+            "vorige_scan": None,
+        }
+
+    # --- objecten (verrijkte rijen behouden alle ruwe numerieke velden) ---
+    objecten = []
+    for r in resultaat["rijen"]:
+        dagen = r.get("dagen_in_monitor")
+        objecten.append({
+            "object_id": r.get("funda_object_id"),
+            "funda_url": r.get("funda_url"),
+            "adres": _leeg_naar_none(r.get("adres")),
+            "plaats": _leeg_naar_none(r.get("plaats")),
+            "gemeente": geo_info(r.get("plaats")).get("gemeente"),
+            "gezochte_categorieen": sorted(business_categorieen_van_rij(r)),
+            "funda_objecttype": [t.strip() for t in (r.get("objecttype") or "").split("|") if t.strip()] or None,
+            "status": _leeg_naar_none(r.get("status")),
+            "is_koopaanbod": business_is_koop_aanbod(r),
+            "is_huuraanbod": business_is_huur_aanbod(r),
+            "is_koop_en_huur_met_prijs": business_is_dual_listed(r),
+            "koopprijs_eur": r.get("koopprijs"),
+            "koopprijs_conditie": _leeg_naar_none(r.get("koopprijs_conditie")),
+            "huurprijs_eur": r.get("huurprijs"),
+            "huurprijs_eenheid": _leeg_naar_none(r.get("huurprijs_eenheid")),
+            "oppervlakte_m2": r.get("oppervlakte_m2"),
+            "oppervlakte_extra_m2": r.get("oppervlakte_extra_m2"),
+            "berekend_jaarhuur_eur": r.get("berekende_huur_per_jaar"),
+            "berekend_maandhuur_eur": r.get("berekende_huur_per_maand"),
+            "berekend_koopprijs_per_m2_eur": r.get("koopprijs_per_m2_eur"),
+            "makelaar": _leeg_naar_none((r.get("makelaar") or "").strip()),
+            "peildatum": r.get("peildatum"),
+            "eerste_waarneming": r.get("eerste_waarneming_moment"),
+            "laatste_waarneming": r.get("laatste_waarneming_moment"),
+            "dagen_in_monitor": dagen if isinstance(dagen, int) else None,
+            "waarschuwing": _leeg_naar_none(r.get("waarschuwing")),
+        })
+
+    return {
+        "export_info": export_info,
+        "markt": markt,
+        "gebieden": {"per_plaats": per_plaats},
+        "makelaars": makelaars,
+        "segmenten": segmenten,
+        "marktdynamiek": marktdynamiek,
+        "objecten": objecten,
+        "methodologie": BUSINESS_AI_METHODOLOGIE,
+        "field_definitions": BUSINESS_AI_FIELD_DEFINITIONS,
+        "suggested_ai_task": AI_EXPORT_SUGGESTED_TASK_BUSINESS,
+    }
+
+
+@app.route("/business/export/ai-json")
+def business_export_ai_json():
+    """Bedrijfsmatig: 'Export voor AI-analyse' - zelfde bouw_business_
+    analyseresultaat()-pipeline als de analysepagina en /business/export/csv.
+    Business kiest altijd de nieuwste scan voor regio + categorieën; de knop
+    geeft daarom het getoonde scan_id mee als `verwacht_scan_id`, zodat een
+    intussen binnengekomen nieuwere scan nooit stilzwijgend wordt geëxporteerd."""
+    resultaat = bouw_business_analyseresultaat(request.args)
+    if resultaat["foutmelding"]:
+        return resultaat["foutmelding"], 404
+
+    verwacht = request.args.get("verwacht_scan_id")
+    if verwacht and str(resultaat["scaninfo"]["scan_id"]) != verwacht:
+        return (
+            "Er is intussen een nieuwere Business-scan voor deze selectie beschikbaar. "
+            "Herlaad de analysepagina en exporteer opnieuw, zodat de export exact overeenkomt met wat u ziet.",
+            409,
+        )
+
+    exportmoment = datetime.now()
+    data = bouw_business_ai_export(resultaat, exportmoment)
+    bestandsnaam = (
+        f"makelaar_monitor_ai_export_bedrijfsmatig_scan{data['export_info']['scan']['scan_id']}"
+        f"_{exportmoment.strftime('%Y%m%d_%H%M')}.json"
+    )
+    return _json_download_response(data, bestandsnaam)
 
 
 @app.route("/business/analyse")
@@ -2973,6 +4012,7 @@ def bouw_makelaar_lokale_marktpositie(
             "totaal_markt": entry["totaal"],
             "marktaandeel_pct": round(eigen_aantal / entry["totaal"] * 100, 1) if entry["totaal"] else 0,
             "ranking_weergave": f"#{rang}",
+            "ranking": rang,
             # Marktintensiteit: uitsluitend context, geen invloed op marktaandeel_pct hierboven.
             "inwoners_weergave": ctx.get("inwoners_weergave", "-"),
             "marktintensiteitsindex": ctx.get("marktintensiteitsindex"),

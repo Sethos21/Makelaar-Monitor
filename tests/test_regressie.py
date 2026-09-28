@@ -58,9 +58,10 @@ def test_routes_geen_serverfout(client) -> None:
         ("/business/scan/status", {}),
         ("/dashboard", {"markt": "woningen"}),
         ("/dashboard", {"markt": "bedrijfsmatig"}),
-        ("/analyse", {"plaats": plaatsen, "status": "Beschikbaar", "bouwcategorie": "Bestaande bouw"}),
-        ("/analyse", {"plaats": plaatsen, "status": "Beschikbaar", "bouwcategorie": "Bestaande bouw", "geo_niveau": "gemeente"}),
-        ("/export/csv", {"plaats": plaatsen, "status": "Beschikbaar", "bouwcategorie": "Bestaande bouw"}),
+        ("/analyse", {"plaats": plaatsen, "status": "Beschikbaar", "bouwcategorie": "Bestaande bouw", "scan_id": "7"}),
+        ("/analyse", {"plaats": plaatsen, "status": "Beschikbaar", "bouwcategorie": "Bestaande bouw", "geo_niveau": "gemeente", "scan_id": "7"}),
+        ("/export/csv", {"plaats": plaatsen, "status": "Beschikbaar", "bouwcategorie": "Bestaande bouw", "scan_id": "7"}),
+        ("/export/ai-json", {"plaats": plaatsen, "status": "Beschikbaar", "bouwcategorie": "Bestaande bouw", "scan_id": "7"}),
         ("/business/analyse", {"business_plaats": "Uden", "business_categorie": ["Kantoor", "Bedrijfsruimte"]}),
     ]
     for route, params in routes:
@@ -113,6 +114,7 @@ def test_deel_g_sluitcontroles(con, filter_combo: dict, label: str) -> dict:
 
     totaal = r["kpis"]["aantal_objecten"]
     resultaat["analyse_aantal"] = totaal
+    check(f"[{label}] selectie niet leeg (sluitcontroles niet triviaal)", totaal > 0, f"({totaal})")
 
     # 1) KPI actief aanbod == som objecten makelaarstabel (incl. Onbekend)
     som_makelaars = sum(m["aantal"] for m in r["makelaarstabel"])
@@ -180,6 +182,37 @@ def test_deel_g_sluitcontroles(con, filter_combo: dict, label: str) -> dict:
     return resultaat
 
 
+def test_gemiddelde_vraagprijs_zonder_prijs() -> None:
+    """Bugfix 2026-09-25: gemiddelde vraagprijs = som bekende vraagprijzen /
+    aantal objecten MET een bekende geldige vraagprijs (niet / alle objecten).
+    Synthetisch + op echte data (scan 7 bevat 3 objecten zonder vraagprijs)."""
+    rijen = [
+        {"vraagprijs": 400_000, "woonoppervlakte": 100, "status": "Beschikbaar", "makelaar": "A"},
+        {"vraagprijs": 600_000, "woonoppervlakte": 120, "status": "Beschikbaar", "makelaar": "A"},
+        {"vraagprijs": None, "woonoppervlakte": 90, "status": "Beschikbaar", "makelaar": "B"},
+        {"vraagprijs": None, "woonoppervlakte": None, "status": "Onder bod", "makelaar": ""},
+    ]
+    k = appmod.bereken_kpis(rijen)
+    check("gem. vraagprijs: centrale functie == 500.000 (niet 250.000)", appmod.bereken_gemiddelde_vraagprijs(rijen) == 500_000)
+    check("gem. vraagprijs: KPI-weergave == € 500.000", k["gemiddelde_vraagprijs"] == "€ 500.000", f"({k['gemiddelde_vraagprijs']})")
+    check("gem. vraagprijs: KPI ruw == 500000, gebaseerd op 2 objecten", k["gemiddelde_vraagprijs_eur"] == 500_000 and k["aantal_met_vraagprijs"] == 2)
+    check("totale vraagwaarde ongewijzigd (1.000.000)", k["totale_vraagprijs"] == "€ 1.000.000")
+    check("mediaan ongewijzigd over bekende prijzen (500.000)", k["mediaan_vraagprijs"] == "€ 500.000")
+    check("aantal_objecten blijft alle 4 objecten", k["aantal_objecten"] == 4)
+    geen = appmod.bereken_kpis([{"vraagprijs": None, "status": "Beschikbaar"}])
+    check("geen enkele bekende prijs -> '-' / None (nooit € 0)", geen["gemiddelde_vraagprijs"] == "-" and geen["gemiddelde_vraagprijs_eur"] is None)
+    check("lege selectie -> '-' (nooit € 0)", appmod.bereken_kpis([])["gemiddelde_vraagprijs"] == "-")
+
+    r = appmod.bouw_analyseresultaat(maak_args(
+        plaats=["Heesch", "Heeswijk-Dinther", "Nistelrode", "Vinkel", "Vorstenbosch"],
+        status=list(appmod.STATUSSEN), bouwcategorie="Alles", scan_id="7",
+    ))
+    prijzen = [x["vraagprijs"] for x in r["ruwe_rijen"] if x.get("vraagprijs") is not None]
+    verwacht = round(sum(prijzen) / len(prijzen))
+    check("scan 7: selectie bevat objecten zonder vraagprijs (test is niet triviaal)", len(prijzen) < len(r["ruwe_rijen"]), f"({len(prijzen)}/{len(r['ruwe_rijen'])})")
+    check("scan 7: Analyse-KPI gem. vraagprijs == som/aantal bekende prijzen", r["kpis"]["gemiddelde_vraagprijs"] == appmod.formatteer_bedrag(verwacht), f"({r['kpis']['gemiddelde_vraagprijs']} vs {verwacht})")
+
+
 def test_deel_g10_naamvarianten(con) -> None:
     """G10: geen makelaar mag door naamformattering onbedoeld dubbel
     voorkomen (casefold-botsing tussen verschillende ruwe schrijfwijzen) -
@@ -215,16 +248,18 @@ def test_deel_c8_deterministisch(con) -> None:
 
 def test_deel_b2_makelaarsprofiel_geen_typeerror(client, con) -> None:
     """B2: geen enkele makelaarsprofielroute mag TypeError geven - test met
-    de nieuwste scan, meerdere echte makelaars + randgevallen."""
+    de 5-plaatsen-scan 7 (expliciet gepind: de nieuwste scan kan een ander
+    gebied zijn), meerdere echte makelaars + randgevallen."""
     from urllib.parse import quote
 
-    scan_id = appmod.haal_laatste_scan_id(con)
+    scan_id = 7
     namen = [r["makelaar"] for r in con.execute(
         "SELECT DISTINCT makelaar FROM snapshots WHERE scan_id = ? AND makelaar IS NOT NULL AND makelaar <> ''",
         (scan_id,),
     )]
     qs = [("plaats", p) for p in ["Heesch", "Heeswijk-Dinther", "Nistelrode", "Vinkel", "Vorstenbosch"]] + \
-         [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles")]
+         [("status", s) for s in appmod.STATUSSEN] + [("bouwcategorie", "Alles"), ("scan_id", str(scan_id))]
+    check("B2: scan 7 bevat makelaars om te testen", len(namen) > 5, f"({len(namen)})")
     for naam in namen + ["Onbekend", "Niet-bestaande Makelaar XYZ"]:
         resp = client.get("/makelaar/woningen/" + quote(naam), query_string=qs)
         check(f"B2: makelaarsprofiel '{naam}' geen serverfout", resp.status_code == 200, f"(status={resp.status_code})")
@@ -244,14 +279,15 @@ def hoofd() -> int:
         test_deel_c8_deterministisch(con)
         test_deel_b2_makelaarsprofiel_geen_typeerror(client, con)
         test_deel_g10_naamvarianten(con)
+        test_gemiddelde_vraagprijs_zonder_prijs()
 
-        print("\n=== DEEL L: cross-checktabel (4 filtercombinaties, nieuwste 5-plaatsen-scan) ===")
+        print("\n=== DEEL L: cross-checktabel (4 filtercombinaties, 5-plaatsen-scan 7) ===")
         plaatsen = ["Heesch", "Heeswijk-Dinther", "Nistelrode", "Vinkel", "Vorstenbosch"]
         combos = {
-            "A. Beschikbaar + Bestaande bouw": dict(plaats=plaatsen, status="Beschikbaar", bouwcategorie="Bestaande bouw"),
-            "B. Alle statussen + Bestaande bouw": dict(plaats=plaatsen, status=list(appmod.STATUSSEN), bouwcategorie="Bestaande bouw"),
-            "C. Beschikbaar + Alle bouwcategorieën": dict(plaats=plaatsen, status="Beschikbaar", bouwcategorie="Alles"),
-            "D. Alle statussen + Alle bouwcategorieën": dict(plaats=plaatsen, status=list(appmod.STATUSSEN), bouwcategorie="Alles"),
+            "A. Beschikbaar + Bestaande bouw": dict(plaats=plaatsen, status="Beschikbaar", bouwcategorie="Bestaande bouw", scan_id="7"),
+            "B. Alle statussen + Bestaande bouw": dict(plaats=plaatsen, status=list(appmod.STATUSSEN), bouwcategorie="Bestaande bouw", scan_id="7"),
+            "C. Beschikbaar + Alle bouwcategorieën": dict(plaats=plaatsen, status="Beschikbaar", bouwcategorie="Alles", scan_id="7"),
+            "D. Alle statussen + Alle bouwcategorieën": dict(plaats=plaatsen, status=list(appmod.STATUSSEN), bouwcategorie="Alles", scan_id="7"),
         }
         print(f"{'Filter':45} | {'Analyse':>7} | {'Makelaars':>9} | {'Plaats/gem':>10} | Sluit?")
         for label, combo in combos.items():

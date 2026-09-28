@@ -6,6 +6,51 @@ Per item: module, omschrijving, reproduceerbaar, ernst, vermoedelijke oorzaak, n
 
 ---
 
+## Update 2026-09-25 (3) - AI-analyse-export Bedrijfsmatig
+
+### NIEUW (niet-blokkerend): Business-plaatsen buiten GEO_REFERENTIE hebben geen gemeente
+- **Module:** `app.py`, `GEO_REFERENTIE` (Business-export, `gebieden.per_plaats` en `objecten.gemeente`).
+- **Omschrijving:** Oss (61 van 142 objecten in Business-scan 7) staat niet in de statische referentietabel. Gemeente/provincie worden daardoor null, veilig en niet geraden.
+- **Ernst:** Laag.
+- **Nog op te lossen:** Optioneel: Oss (gemeente Oss) handmatig geverifieerd toevoegen.
+
+### DOCUMENTATIE: Business-scanner meet geen status per object
+- De Business-scanner leest de standaardlijst die alleen actief aanbod toont. Status is daardoor altijd "Beschikbaar" (hardcoded in `parse_rij()`). De AI-export vermeldt dit expliciet, zodat een AI dit niet als gemeten statusverdeling leest. Geen fout, wel een beperking.
+
+---
+
+## Update 2026-09-25 - AI-analyse-export (Woningen)
+
+### OPGELOST (stabilisatieronde 2026-09-25): Analyse-KPI "Gemiddelde vraagprijs" deelde door alle objecten
+- Opgelost via de centrale `bereken_gemiddelde_vraagprijs()` (som bekende geldige prijzen / aantal daarvan), gedeeld door de Analyse-KPI en de AI-export. Scan 7 (alle statussen/Alles): € 621.101; scan 10 Uden (standaardfilters): € 620.019. Regressietest in `tests/test_regressie.py`. Oorspronkelijke melding hieronder bewaard.
+
+### (was) NIEUW: Analyse-KPI "Gemiddelde vraagprijs" deelt door alle objecten, ook zonder vraagprijs
+- **Module:** `app.py`, `bereken_kpis()` (Woningen, analysepagina).
+- **Omschrijving:** `gemiddeld = totaal / aantal`, waarbij `aantal` ook objecten zonder vraagprijs (bv. prijs op aanvraag) bevat; die tellen daardoor als €0 mee. Scan 7, alle statussen/Alles: pagina toont € 605.310, correct (over 115 bekende prijzen) is € 621.101. Makelaarstabel/plaatsverdeling/segmenten rekenen al wél correct over bekende prijzen.
+- **Ernst:** Middel (zichtbaar kerncijfer, systematisch te laag zodra er objecten zonder prijs zijn).
+- **Stand:** de AI-export gebruikt al de correcte waarde (`gemiddelde_vraagprijs_eur`, nieuw ruw veld). De paginaweergave is bewust niet aangepast (buiten scope).
+- **Nog op te lossen:** Ja - kleine fix: `gemiddeld` baseren op `prijzen` i.p.v. `aantal`.
+
+### OPGELOST (stabilisatieronde 2026-09-25): verouderde testsuites
+- De 5-plaatsen-selecties zijn expliciet gepind op `scan_id=7`; alle vijf suites zijn groen (95/18/41/66/97). Oorspronkelijke melding hieronder bewaard.
+
+### (was) NIEUW: twee testsuites verouderd sinds scans 8/9/10 (test-kalibratie, geen applicatiebug)
+- **Module:** `tests/test_marktintensiteit_20260910.py`, `tests/test_stabilisatie_20260909.py` (en deels `tests/test_regressie.py`).
+- **Omschrijving:** gaan ervan uit dat de actuele scan scan_id 7 is. Nieuwste is nu scan 10 (Uden), dus de 5-plaatsenselectie zonder `scan_id` levert 0 objecten: 13 resp. 7 FAIL (+1 crash); `test_regressie.py` slaagt maar deels op een lege selectie. Vóór en na de AI-export-ronde identiek (niet veroorzaakt door die ronde).
+- **Nog op te lossen:** Ja - `scan_id=7` expliciet meegeven (zoals `tests/test_ai_export_20260925.py` al doet).
+
+### BEVESTIGD: methodiekbreuk-mechanisme werkt met een echte 2e post-methodiek-scan
+- Scan 9 (2026-09-10 16:34, Heesch/Heeswijk-Dinther/Nistelrode/Vorstenbosch) vergelijkt met scan 8 (16:07, zelfde gebied). Het eerdere punt "nog niet bevestigd met een ECHTE 2e scan" is hiermee afgedekt.
+
+### NIEUW (niet-blokkerend): scan 8 heeft vrijwel zeker een onvolledige Nistelrode-dekking
+- **Module:** data/scanner (geen codewijziging).
+- **Omschrijving:** scan 8 bevat 2 Nistelrode-objecten, scan 9 (27 min later) 28. Alle 26 "Nieuw aanbod" in de vergelijking 8→9 zitten in Nistelrode. Dat is vrijwel zeker een scanartefact (Funda-aanbod Nistelrode ≈ 26-27), geen marktbeweging. De marktdynamiek (en een AI-export) van scan 9 toont dus een fictieve aanbodstijging van +26.
+- **Ernst:** Laag-middel (alleen voor de vergelijking 8→9; verdwijnt uit "actueel" zodra er een nieuwere scan van dit gebied komt).
+- **Vermoedelijke oorzaak:** onbekend - niet onderzocht (bv. Funda-controle/afgebroken paginering tijdens scan 8). Geen historische data gewijzigd.
+- **Nog op te lossen:** Beslissen: niets doen, of een plausibiliteitswaarschuwing bij grote per-plaats-sprongen tussen twee scans.
+
+---
+
 ## Update 2026-09-10 - gerichte uitbreiding: Marktintensiteit + makelaarsprofiel-context + Business-referentiedata + hernieuwd Funda-linkonderzoek
 
 ### OPGELOST/NIEUW: Marktintensiteit toegevoegd aan Verdeling per plaats/gemeente (Woningen)

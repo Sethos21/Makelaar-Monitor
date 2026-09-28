@@ -429,9 +429,11 @@
 {% endif %}
 
 <h2 class="sectie-titel">6. Export</h2>
-<p class="subtabel-titel">De analysepagina toont een samenvatting. Volledige objectdata (alle velden, alle objecten in deze selectie) is beschikbaar als CSV-export.</p>
+<p class="subtabel-titel">De analysepagina toont een samenvatting. Volledige objectdata (alle velden, alle objecten in deze selectie) is beschikbaar als CSV-export. "Export voor AI-analyse" levert één JSON-bestand met exact deze selectie (kerncijfers, alle makelaars, gebieden, prijssegmenten, marktdynamiek, objecten en veldtoelichting) om zelf aan een AI-chat te geven.</p>
 <div class="analyse-knoppen">
     <a class="secondary-button" href="{{ url_for('export_csv') }}?{{ querystring }}">Export CSV (volledige detaildata)</a>
+    {# scan_id altijd expliciet meegeven: ook als er intussen een nieuwere scan binnenkomt, exporteert de knop exact de scan die op deze pagina staat. #}
+    <a class="secondary-button" href="{{ url_for('export_ai_json') }}?{{ querystring }}{% if scaninfo and scaninfo.scan_id and 'scan_id=' not in querystring %}&scan_id={{ scaninfo.scan_id }}{% endif %}">Export voor AI-analyse</a>
 </div>
 
 {% if rijen %}
